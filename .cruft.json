@@ -1,0 +1,29 @@
+{
+  "template": "https://github.com/scverse/cookiecutter-scverse",
+  "commit": "f0ce514218f780de7e76dc87a7d52a86034174a7",
+  "checkout": null,
+  "context": {
+    "cookiecutter": {
+      "project_name": "PolarbearPlus",
+      "package_name": "polarbearplus",
+      "project_description": "Polarbear + normalizing flows",
+      "author_full_name": "Ilia Kats",
+      "author_email": "ilia-kats@gmx.net",
+      "github_user": "ilia-kats",
+      "project_repo": "https://github.com/ilia-kats/PolarbearPlus",
+      "license": "GNU General Public License Version 3",
+      "_copy_without_render": [
+        ".github/workflows/build.yaml",
+        ".github/workflows/test.yaml",
+        "docs/_templates/autosummary/**.rst"
+      ],
+      "_render_devdocs": false,
+      "_jinja2_env_vars": {
+        "lstrip_blocks": true,
+        "trim_blocks": true
+      },
+      "_template": "https://github.com/scverse/cookiecutter-scverse"
+    }
+  },
+  "directory": null
+}
