@@ -47,11 +47,9 @@ class RNAVAE(PyroModule):
             decoder_dropout = encoder_dropout
         self.decoder = MLP(n_latent_dim + nbatches, ngenes, decoder_layer_width, decoder_n_layers, decoder_dropout)
 
-        self.theta = PyroParam(torch.randn(1).exp(), constraint=constraints.positive)
+        self.theta = PyroParam(torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.positive)
 
     def model(self, expression_mat, batch_idx):
-        with pyro.plate("batches", size=self.nbatches, dim=-1):
-            theta_b = self.theta  # (nbatches, 1)
         with pyro.plate("cells", size=expression_mat.shape[0], dim=-2):
             l_n = pyro.sample(
                 "l_n", dist.LogNormal(self.logbatchmeans[batch_idx], self.logbatchstds[batch_idx])
@@ -63,7 +61,7 @@ class RNAVAE(PyroModule):
             rho_n = torch.softmax(self.decoder(z_n), -1)  # (ncells, ngenes)
 
             mu = l_n * rho_n
-            theta_b = theta_b[batch_idx, :]
+            theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
             with pyro.plate("genes", size=expression_mat.shape[1], dim=-1):
                 pyro.sample(
                     "data", dist.GammaPoisson(concentration=1 / theta_b, rate=1 / (theta_b * mu)), obs=expression_mat
