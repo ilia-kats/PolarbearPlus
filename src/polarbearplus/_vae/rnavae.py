@@ -8,8 +8,23 @@ from torch.nn import functional as F
 
 from .mlp import MLP
 
+class _RNAVAE(PyroModule):
+    """
+    Pyro implementation of a VAE for scRNAseq data, based on scVI.
 
-class RNAVAE(PyroModule):
+    Args:
+        ngenes: Number of genes.
+        nbatches: Number of experimental batches.
+        logbatchmeans: Vector of means of log library sizes for all batches.
+        logbatchvars: Vector of variances of log library sizes for all batches.
+        n_latent_dim: Number of latent dimensions.
+        encoder_n_layers: Number of hidden layers in the encoder.
+        encoder_layer_width: Width of the hidden layers in the encoder.
+        encoder_dropout: Dropout probability in the encoder.
+        decoder_n_layers: Number of hidden layers in the decoder.
+        decoder_layer_width: Width of the hidden layers in the decoder.
+        decoder_dropout: Dropout probability in the decoder.
+    """
     def __init__(
         self,
         ngenes: int,
@@ -49,7 +64,14 @@ class RNAVAE(PyroModule):
 
         self.theta = PyroParam(torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.positive)
 
-    def model(self, expression_mat, batch_idx):
+    def model(self, expression_mat: ArrayLike | None, batch_idx: ArrayLike):
+        """
+        Generative model.
+
+        Args:
+            expression_mat: Cells x genes expression matrix
+            batch_idx: Index of the experimental batch for each cell
+        """
         with pyro.plate("cells", size=expression_mat.shape[0], dim=-2):
             l_n = pyro.sample(
                 "l_n", dist.LogNormal(self.logbatchmeans[batch_idx], self.logbatchstds[batch_idx])

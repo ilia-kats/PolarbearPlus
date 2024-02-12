@@ -2,6 +2,16 @@ from torch import nn
 
 
 class MLP(nn.Sequential):
+    """
+    A simple feed-forward neural network.
+
+    Args:
+        input_dim: Number of input dimensions.
+        output_dim: Number of output dimensions.
+        hidden_dim: Width of hidden layers.
+        n_layers: Number of hidden layers.
+        dropout: Dropout probability.
+    """
     def __init__(self, input_dim: int, output_dim: int, hidden_dim: int, n_layers: int, dropout: float = 0.1):
         super().__init__()
         if n_layers < 1:
