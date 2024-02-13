@@ -81,14 +81,19 @@ class _RNAVAE(PyroModule):
         self.nbatches = state["nbatches"]
         self.n_latent_dim = state["n_latent_dim"]
 
-    def model(self, expression_mat: ArrayLike | None, batch_idx: ArrayLike):
+    def model(self, expression_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
         """Generative model.
 
         Args:
-            expression_mat: Cells x genes expression matrix
-            batch_idx: Index of the experimental batch for each cell
+            expression_mat: Cells x genes expression matrix.
+            batch_idx: Index of the experimental batch for each cell.
+            ncells: Number of cells. Only required in generative mode (when no expression matrix is given).
         """
-        with pyro.plate("cells", size=expression_mat.shape[0], dim=-2):
+        if expression_mat is None and ncells is None:
+            raise ValueError("Need either expression_mat or ncells, but both are None.")
+        if ncells is None:
+            ncells = expression_mat.shape[0]
+        with pyro.plate("cells", size=ncells, dim=-2):
             l_n = pyro.sample(
                 "l_n", dist.LogNormal(self.logbatchmeans[batch_idx], self.logbatchstds[batch_idx])
             )  # (ncells, 1)
@@ -100,7 +105,7 @@ class _RNAVAE(PyroModule):
 
             mu = l_n * rho_n
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
-            with pyro.plate("genes", size=expression_mat.shape[1], dim=-1):
+            with pyro.plate("genes", size=self.ngenes, dim=-1):
                 pyro.sample(
                     "data", dist.GammaPoisson(concentration=1 / theta_b, rate=1 / (theta_b * mu)), obs=expression_mat
                 )
