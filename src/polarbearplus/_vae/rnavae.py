@@ -61,7 +61,14 @@ class _RNAVAE(PyroModule):
             decoder_layer_width = encoder_layer_width
         if decoder_dropout is None:
             decoder_dropout = encoder_dropout
-        self.decoder = MLP(n_latent_dim + nbatches, ngenes, decoder_layer_width, decoder_n_layers, decoder_dropout)
+        self.decoder = MLP(
+            n_latent_dim + nbatches,
+            ngenes,
+            decoder_layer_width,
+            decoder_n_layers,
+            decoder_dropout,
+            last_activation=torch.nn.Softmax(dim=-1),
+        )
         self._l_encoder = MLP(ngenes + nbatches, 2, encoder_layer_width, 1, encoder_dropout)
 
         self.theta = PyroParam(torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.positive)
@@ -89,7 +96,7 @@ class _RNAVAE(PyroModule):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
             z_n = torch.cat((z_n, F.one_hot(batch_idx, self.n_batches).to(z_n.dtype)), -1)
-            rho_n = torch.softmax(self.decoder(z_n), -1)  # (ncells, ngenes)
+            rho_n = self.decoder(z_n)  # (ncells, ngenes)
 
             mu = l_n * rho_n
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
