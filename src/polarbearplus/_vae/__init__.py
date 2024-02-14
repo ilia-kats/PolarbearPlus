@@ -1,1 +1,2 @@
-from .rna_vae import RNAVAE
+from .atacvae import ATACVAE
+from .rnavae import RNAVAE
