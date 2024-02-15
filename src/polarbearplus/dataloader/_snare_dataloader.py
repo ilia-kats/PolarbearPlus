@@ -157,5 +157,5 @@ class SNAREDataModule(pl.LightningDataModule):
 
     def teardown(self, stage: str):
         # Used to clean-up when the run is finished
-        print(stage)
+        print(stage)  # otherwise git hooks will fail
         ...
