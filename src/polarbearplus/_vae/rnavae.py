@@ -1,14 +1,14 @@
 import pyro
 import pyro.distributions as dist
 import torch
-from lightning import pytorch as pl
 from numpy.typing import ArrayLike
 from pyro.nn import PyroModule, PyroParam
+from torch import nn
 from torch.distributions import constraints
 from torch.nn import functional as F
 
 from .mlp import MLP
-from .scalelatentmessenger import scale_latent
+from .vaebase import VAEBase
 
 
 class _RNAVAE(PyroModule):
@@ -67,7 +67,7 @@ class _RNAVAE(PyroModule):
             decoder_layer_width,
             decoder_n_layers,
             decoder_dropout,
-            last_activation=torch.nn.Softmax(dim=-1),
+            last_activation=nn.Softmax(dim=-1),
         )
         self._l_encoder = MLP(ngenes + nbatches, 2, encoder_layer_width, 1, encoder_dropout)
 
@@ -152,7 +152,7 @@ class _RNAVAE(PyroModule):
                 pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))  # (ncells, nlatent)
 
 
-class RNAVAE(pl.LightningModule):
+class RNAVAE(VAEBase):
     """A beta-VAE for scRNAseq data.
 
     Args:
@@ -187,7 +187,10 @@ class RNAVAE(pl.LightningModule):
         lr: float = 1e-3,
         beta: float = 1,
     ):
-        self._vae = _RNAVAE(
+        super().__init__(
+            _RNAVAE,
+            lr,
+            beta,
             ngenes=ngenes,
             nbatches=nbatches,
             logbatchmeans=logbatchmeans,
@@ -200,28 +203,3 @@ class RNAVAE(pl.LightningModule):
             decoder_layer_width=decoder_layer_width,
             decoder_dropout=decoder_dropout,
         )
-        self._elbo = pyro.infer.TraceMeanField_ELBO()(
-            scale_latent(self._vae.model, beta), scale_latent(self._vae.guide, beta)
-        )
-        self._lr = lr
-
-        self.save_hyperparameters()
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(self._elbo.parameters(), lr=self._lr)
-
-    def training_step(self, batch, batch_idx, dataloader_idx=0):
-        elbo = self._elbo(*batch)
-        self.log("-elbo", elbo, on_step=True, on_epoch=True)
-        return elbo
-
-    def forward(self, batch):
-        return self._vae.encode(*batch)
-
-    @property
-    def encoder(self):
-        return self._vae.encoder
-
-    @property
-    def decoder(self):
-        return self._vae.decoder
