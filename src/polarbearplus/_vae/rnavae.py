@@ -95,12 +95,12 @@ class _RNAVAE(PyroModule):
             ncells = expression_mat.shape[0]
         with pyro.plate("cells", size=ncells, dim=-2):
             l_n = pyro.sample(
-                "l_n", dist.LogNormal(self.logbatchmeans[batch_idx], self.logbatchstds[batch_idx])
+                "l_n", dist.LogNormal(self.logbatchmeans[batch_idx, None], self.logbatchstds[batch_idx, None])
             )  # (ncells, 1)
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
-            z_n = torch.cat((z_n, F.one_hot(batch_idx, self.n_batches).to(z_n.dtype)), -1)
+            z_n = torch.cat((z_n, F.one_hot(batch_idx, self.nbatches).to(z_n.dtype)), -1)
             rho_n = self.decoder(z_n)  # (ncells, ngenes)
 
             mu = l_n * rho_n
@@ -123,7 +123,7 @@ class _RNAVAE(PyroModule):
             tuple with means and standard deviations of the latent Normal, followed by locations and scales of the
             LogNormal size factor distribution.
         """
-        concat = torch.cat((expression_mat, F.one_hot(batch_idx, self.n_batches).to(expression_mat.dtype)), -1)
+        concat = torch.cat((expression_mat, F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1)
         encoded = self.encoder(concat)
         latent_means = encoded[:, : self.n_latent_dim]
         latent_stdevs = encoded[:, self.n_latent_dim :].exp()
@@ -147,7 +147,7 @@ class _RNAVAE(PyroModule):
             expression_mat, batch_idx, latentonly=False
         )
         with pyro.plate("cells", size=expression_mat.shape[0], dim=-2):
-            pyro.sample("l_n", dist.LogNormal(sizefactor_means, sizefactor_stdevs))  # (ncells, 1)
+            pyro.sample("l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None]))  # (ncells, 1)
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))  # (ncells, nlatent)
 
