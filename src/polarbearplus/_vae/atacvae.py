@@ -22,17 +22,26 @@ class _Encoder(nn.Module):
         output_dim: Number of output dimensions.
         n_layers: Number of hidden layers.
         dropout: Dropout probability.
+        hidden_width_factor: Scaling factor for the width of the hidden layers.
     """
 
     def __init__(
-        self, nconditions: int, chr_idx: list[tuple[int, int]], output_dim: int, n_layers: int, dropout: float = 0.1
+        self,
+        nconditions: int,
+        chr_idx: list[tuple[int, int]],
+        output_dim: int,
+        n_layers: int,
+        dropout: float = 0.1,
+        hidden_width_factor: float = 1.0,
     ):
         super().__init__()
 
+        self._chr_idx = chr_idx
         self._encoders = nn.ModuleList()
+        self._nconditions = nconditions
         for idx_start, idx_end in chr_idx:
             indim = idx_end - idx_start
-            hidden_dim = int((indim * output_dim) ** 0.5)
+            hidden_dim = int((indim * output_dim) ** 0.5 * hidden_width_factor)
             self._encoders.append(
                 MLP(
                     input_dim=indim + nconditions,
@@ -45,8 +54,25 @@ class _Encoder(nn.Module):
 
         self._output = nn.Sequential(nn.Linear(len(chr_idx) * output_dim, 2 * output_dim))
 
-    def forward(self, x):
-        return self._output(torch.cat([enc(x) for enc in self._encoders], -1))
+    def forward(self, x, conditions):
+        return self._output(
+            torch.cat(
+                [
+                    enc(
+                        torch.cat((x[..., idx_start:idx_end], F.one_hot(conditions, self._nconditions).to(x.dtype)), -1)
+                    )
+                    for (idx_start, idx_end), enc in zip(self._chr_idx, self._encoders, strict=False)
+                ],
+                -1,
+            )
+        )
+
+    def get_extra_state(self):
+        return {"chr_idx": self._chr_idx, "nconditions": self._nconditions}
+
+    def set_extra_state(self, state):
+        self._chr_idx = state["chr_idx"]
+        self._nconditions = state["nconditions"]
 
 
 class _Decoder(nn.Module):
@@ -60,17 +86,25 @@ class _Decoder(nn.Module):
         input_dim: Number of input dimensions.
         n_layers: Number of hidden layers.
         dropout: Dropout probability.
+        hidden_width_factor: Scaling factor for the width of the hidden layers.
     """
 
     def __init__(
-        self, nconditions: int, chr_idx: list[tuple[int, int]], input_dim: int, n_layers: int, dropout: float = 0.1
+        self,
+        nconditions: int,
+        chr_idx: list[tuple[int, int]],
+        input_dim: int,
+        n_layers: int,
+        dropout: float = 0.1,
+        hidden_width_factor: float = 1.0,
     ):
         super().__init__()
 
         self._decoders = nn.ModuleList()
-        for idx_start, idx_end in chr_idx:
+        self._nconditions = nconditions
+        for idx_start, idx_end in sorted(chr_idx):
             outdim = idx_end - idx_start
-            hidden_dim = int((outdim * input_dim) ** 0.5)
+            hidden_dim = int((outdim * input_dim) ** 0.5 * hidden_width_factor)
             self._decoders.append(
                 MLP(
                     input_dim=input_dim + nconditions,
@@ -81,8 +115,9 @@ class _Decoder(nn.Module):
                 )
             )
 
-    def forward(self, x):
-        return torch.cat([dec(x) for dec in self._decoders], -1)
+    def forward(self, x, conditions):
+        concat = torch.cat((x, F.one_hot(conditions, self._nconditions).to(x.dtype)), -1)
+        return torch.sigmoid(torch.cat([dec(concat) for dec in self._decoders], -1))
 
 
 class _ATACVAE(PyroModule):
@@ -102,6 +137,7 @@ class _ATACVAE(PyroModule):
         self,
         chr_idx: list[tuple[int, int]],
         nbatches: int,
+        hidden_width_factor: float = 1.0,
         n_latent_dim: int | None = None,
         encoder_n_layers: int = 3,
         encoder_dropout: float = 0.1,
@@ -123,18 +159,18 @@ class _ATACVAE(PyroModule):
             decoder_n_layers = encoder_n_layers
         if decoder_dropout is None:
             decoder_dropout = encoder_dropout
-        self.encoder = _Encoder(nbatches, chr_idx, n_latent_dim, encoder_n_layers, encoder_dropout)
-        self.decoder = _Decoder(nbatches, chr_idx, n_latent_dim, decoder_n_layers, decoder_dropout)
+        self.encoder = _Encoder(nbatches, chr_idx, n_latent_dim, encoder_n_layers, encoder_dropout, hidden_width_factor)
+        self.decoder = _Decoder(nbatches, chr_idx, n_latent_dim, decoder_n_layers, decoder_dropout, hidden_width_factor)
         self._l_encoder = MLP(
             self.nregions + nbatches,
             1,
-            (self.nregions * n_latent_dim) ** 0.5,
+            int((self.nregions * n_latent_dim) ** 0.5 * hidden_width_factor),
             encoder_n_layers,
             encoder_dropout,
             last_activation=nn.Sigmoid,
         )
 
-        self.r = PyroParam(torch.randn((self.nregions,)).exp(), constraint=constraints.positive)
+        self.r = PyroParam(torch.randn((self.nregions,)).sigmoid(), constraint=constraints.interval(0, 1))
 
     def get_extra_state(self):
         return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self.n_latent_dim}
@@ -145,8 +181,7 @@ class _ATACVAE(PyroModule):
         self.n_latent_dim = state["n_latent_dim"]
 
     def encode(self, region_mat: ArrayLike, batch_idx: ArrayLike):
-        concat = torch.cat((region_mat, F.one_hot(batch_idx, self.nbatches).astype(region_mat)), -1)
-        latents = self.encoder(concat)
+        latents = self.encoder(region_mat, batch_idx)
         latent_means = latents[:, : self.n_latent_dim]
         latent_stdevs = latents[:, self.n_latent_dim :].exp()
         return latent_means, latent_stdevs
@@ -172,11 +207,10 @@ class _ATACVAE(PyroModule):
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
-            z_n = torch.cat((z_n, F.one_hot(batch_idx, self.n_batches).to(z_n.dtype)), -1)
-            y_n = self.decoder(z_n)  # (ncells, nregions)
+            y_n = self.decoder(z_n, batch_idx)  # (ncells, nregions)
 
             with pyro.plate("regions", size=self.nregions, dim=-1):
-                pyro.sample("data", dist.Bernoulli(probs=y_n * l_n * self.r))
+                pyro.sample("data", dist.Bernoulli(probs=y_n * l_n * self.r), obs=region_mat)
 
     def guide(self, region_mat: ArrayLike | None, batch_idx: ArrayLike):
         """Variational posterior.

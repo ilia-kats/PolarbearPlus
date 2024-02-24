@@ -7,6 +7,7 @@ from .scalelatentmessenger import scale_latent
 
 class VAEBase(pl.LightningModule):
     def __init__(self, modulecls: type[pyro.nn.PyroModule], lr: float, beta: float, *args, **kwargs):
+        super().__init__()
         self._vae = modulecls(*args, **kwargs)
         self._elbo = pyro.infer.TraceMeanField_ELBO()(
             scale_latent(self._vae.model, beta), scale_latent(self._vae.guide, beta)
@@ -25,7 +26,7 @@ class VAEBase(pl.LightningModule):
         self._old_module_local_params = None
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self._elbo.parameters(), lr=self._lr)
+        return torch.optim.Adam(self._vae.parameters(), lr=self._lr)
 
     def training_step(self, batch, batch_idx, dataloader_idx=0):
         elbo = self._elbo(*batch)
