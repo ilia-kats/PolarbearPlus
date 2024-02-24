@@ -12,17 +12,19 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 class SNAREDataModule(L.LightningDataModule):
     """Data Module for SNAREseq dataset."""
 
+    files = [
+        "adultbrainfull50_rna_outer_snareseq.mtx",
+        "adultbrainfull50_atac_outer_snareseq.mtx",
+        "adultbrainfull50_atac_outer_snareseq_barcodes.tsv",
+        "adultbrainfull50_atac_outer_peaks.txt",
+        "adultbrainfull50_rna_outer_genes.txt",
+    ]
+    base_url = "https://noble.gs.washington.edu/~ranz0/Polarbear/data/"
+
     def __init__(self, data_dir: str = "./data/snareseq"):
         super().__init__()
+        self.seed = 42
         self.data_dir = data_dir
-        self.files = [
-            "adultbrainfull50_rna_outer_snareseq.mtx",
-            "adultbrainfull50_atac_outer_snareseq.mtx",
-            "adultbrainfull50_atac_outer_snareseq_barcodes.tsv",
-            "adultbrainfull50_atac_outer_peaks.txt",
-            "adultbrainfull50_rna_outer_genes.txt",
-        ]
-        self.base_url = "https://noble.gs.washington.edu/~ranz0/Polarbear/data/"
         self._num_cells = None
         self._num_peaks = None
         self._num_genes = None
@@ -54,7 +56,7 @@ class SNAREDataModule(L.LightningDataModule):
             os.path.join(self.data_dir, "adultbrainfull50_atac_outer_snareseq_barcodes.tsv"), sep="\t", header=0
         )
         train, test, val = random_split(
-            torch.Tensor(cells.index), [0.6, 0.2, 0.2], generator=torch.Generator().manual_seed(42)
+            torch.Tensor(cells.index), [0.6, 0.2, 0.2], generator=torch.Generator().manual_seed(self.seed)
         )
         for i, name in zip([train.indices, test.indices, val.indices], ["train", "test", "val"], strict=False):
             torch.save(i, os.path.join(self.data_dir, f"{name}.pt"))
