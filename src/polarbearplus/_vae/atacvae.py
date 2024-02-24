@@ -1,7 +1,6 @@
 import pyro
 import pyro.distributions as dist
 import torch
-from lightning import pytorch as pl
 from numpy.typing import ArrayLike
 from pyro.nn import PyroModule, PyroParam
 from torch import nn
@@ -9,7 +8,7 @@ from torch.distributions import constraints
 from torch.nn import functional as F
 
 from .mlp import MLP
-from .scalelatentmessenger import scale_latent
+from .vaebase import VAEBase
 
 
 class _Encoder(nn.Module):
@@ -145,6 +144,13 @@ class _ATACVAE(PyroModule):
         self.nbatches = state["nbatches"]
         self.n_latent_dim = state["n_latent_dim"]
 
+    def encode(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+        concat = torch.cat((region_mat, F.one_hot(batch_idx, self.nbatches).astype(region_mat)), -1)
+        latents = self.encoder(concat)
+        latent_means = latents[:, : self.n_latent_dim]
+        latent_stdevs = latents[:, self.n_latent_dim :].exp()
+        return latent_means, latent_stdevs
+
     def model(self, region_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
         """Generative model.
 
@@ -179,16 +185,13 @@ class _ATACVAE(PyroModule):
             region_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        concat = torch.cat((region_mat, F.one_hot(batch_idx, self.nbatches).astype(region_mat)), -1)
-        latents = self.encoder(concat)
-        latent_means = latents[:, : self.n_latent_dim]
-        latent_stdevs = latents[:, self.n_latent_dim :].exp()
+        latent_means, latent_stdevs = self.encode(region_mat, batch_idx)
         with pyro.plate("cells", size=region_mat.shape[0], dim=-2):  # noqa SIM117
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))
 
 
-class ATACVAE(pl.LightningModule):
+class ATACVAE(VAEBase):
     """A beta-VAE for scATACseq data.
 
     Args:
@@ -215,7 +218,10 @@ class ATACVAE(pl.LightningModule):
         lr: float = 1e-3,
         beta: float = 1,
     ):
-        self._vae = _ATACVAE(
+        super().__init__(
+            _ATACVAE,
+            lr,
+            beta,
             chr_idx=chr_idx,
             nbatches=nbatches,
             n_latent_dim=n_latent_dim,
@@ -224,28 +230,3 @@ class ATACVAE(pl.LightningModule):
             decoder_n_layers=decoder_n_layers,
             decoder_dropout=decoder_dropout,
         )
-        self._elbo = pyro.infer.TraceMeanField_ELBO()(
-            scale_latent(self._vae.model, beta), scale_latent(self._vae.guide, beta)
-        )
-        self._lr = lr
-
-        self.save_hyperparameters()
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(self._elbo.parameters(), lr=self._lr)
-
-    def training_step(self, batch, batch_idx, dataloader_idx=0):
-        elbo = self._elbo(*batch)
-        self.log("-elbo", elbo, on_step=True, on_epoch=True)
-        return elbo
-
-    def forward(self, batch):
-        return self._vae.encode(*batch)
-
-    @property
-    def encoder(self):
-        return self._vae.encoder
-
-    @property
-    def decoder(self):
-        return self._vae.decoder
