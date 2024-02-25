@@ -48,7 +48,7 @@ class DictLogger(Logger):
             self.history[k].loc[step] = v
 
     def after_save_checkpoint(self, checkpoint_callback):
-        filename = os.path.basename(os.path.splitext(checkpoint_callback.last_model_path))
+        filename = os.path.basename(os.path.splitext(checkpoint_callback.last_model_path)[0])
         filename = os.path.join(self._savedir, f"{filename}_{self.name}_{self.version}_log.pkl")
         with open(filename, "wb") as f:
             pickle.dump(
