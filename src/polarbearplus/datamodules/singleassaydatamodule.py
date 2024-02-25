@@ -1,3 +1,4 @@
+import logging
 import os
 import urllib.request
 
@@ -9,6 +10,8 @@ from scipy.io import mmread
 from scipy.sparse import vstack
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm.auto import tqdm
+
+_logger = logging.getLogger(__name__)
 
 
 class _TqdmDownload(tqdm):
@@ -79,14 +82,16 @@ class _DataModuleBase(L.LightningDataModule):
         self._data_dir = data_dir
         self._dset_train = self._dset_test = self._dset_val = None
 
+    def _init(self):
+        self.prepare_data()
+        self.setup()
+
     def prepare_data(self):
         """Download data and prepare train/test/val split."""
         for filedesc, filename in self._files.items():
             url = f"{self._base_url}{filename}"
             filepath = os.path.join(self._data_dir, filename)
-            if os.path.isfile(filepath):
-                print(f"{filepath} already downloaded")
-            else:
+            if not os.path.isfile(filepath):
                 os.makedirs(self._data_dir, exist_ok=True)
                 _download(url, filepath, filedesc)
 
@@ -151,11 +156,15 @@ class AtacDataModule(_DataModuleBase):
     @property
     def num_peaks(self):
         """Number of peaks in the dataset."""
+        if self._num_peaks is None:
+            self._init()
         return self._num_peaks
 
     @property
     def num_cells(self):
         """Number of cells in the dataset."""
+        if self._num_cells is None:
+            self._init()
         return self._num_cells
 
     @property
@@ -166,11 +175,14 @@ class AtacDataModule(_DataModuleBase):
     @property
     def chromosome_indices(self):
         """List of index ranges in the data matrix belonging to separate chromosomes."""
+        if self._chr_idx is None:
+            self._init()
         return self._chr_idx
 
     def setup(self, stage: str | None = None):
         """Load Dataset and assign train/val/test datasets for use in dataloaders."""
         if self._chr_idx is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
+            _logger.info("reading data...")
             atac_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"]))
             atac_counts2 = mmread(os.path.join(self._data_dir, self._files["single"]))
             # concatenate along cell dimension, first g columns correspond to genes, last p columns correspond to peaks
@@ -253,13 +265,15 @@ class RnaDataModule(_DataModuleBase):
     @property
     def num_genes(self):
         """Number of genes in dataset."""
+        if self._num_genes is None:
+            self._init()
         return self._num_genes
 
     @property
-    def num_cells(
-        self,
-    ):
+    def num_cells(self):
         """Number of cells in dataset."""
+        if self._num_cells is None:
+            self._init()
         return self._num_cells
 
     @property
@@ -270,21 +284,28 @@ class RnaDataModule(_DataModuleBase):
     @property
     def genes(self):
         """Gene Metadata."""
+        if self._genes is None:
+            self._init()
         return self._genes
 
     @property
     def logbatchmean(self):
         """Mean of library size for each batch."""
+        if self._logbatchmean is None:
+            self._init()
         return self._logbatchmean
 
     @property
     def logbatchvar(self):
         """Variance of library size for each batch."""
+        if self._logbatchvar is None:
+            self._init()
         return self._logbatchvar
 
     def setup(self, stage: str | None = None):
         """Load Dataset and assign train/val/test datasets for use in dataloaders."""
         if self._genes is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
+            _logger.info("reading data...")
             rna_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"]))
             rna_counts2 = mmread(os.path.join(self._data_dir, self._files["single"]))
             counts = vstack((rna_counts1, rna_counts2)).tocsr().astype(np.float32)
