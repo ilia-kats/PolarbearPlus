@@ -30,7 +30,17 @@ class VAEBase(pl.LightningModule):
 
     def training_step(self, batch, batch_idx, dataloader_idx=0):
         elbo = self._elbo(*batch)
-        self.log("-elbo", elbo, on_step=True, on_epoch=True)
+        self.log("-train_elbo", elbo, on_step=True, on_epoch=True)
+        return elbo
+
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        elbo = self._elbo(*batch)
+        self.log("-validation_elbo", elbo, on_step=True, on_epoch=True)
+        return elbo
+
+    def test_step(self, batch, batch_idx, dataloader_idx=0):
+        elbo = self._elbo(*batch)
+        self.log("-test_elbo", elbo, on_step=True, on_epoch=True)
         return elbo
 
     def forward(self, batch):
