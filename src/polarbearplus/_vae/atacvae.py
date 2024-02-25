@@ -126,6 +126,7 @@ class _ATACVAE(PyroModule):
     Args:
         chr_idx: List of index ranges in the data matrix belonging to separate chromosomes.
         nbatches: Number of experimental batches.
+        hidden_width_factor: Scaling factor for the width of the hidden layers.
         n_latent_dim: Number of latent dimensions.
         encoder_n_layers: Number of hidden layers in the encoder.
         encoder_dropout: Dropout probability in the encoder.
@@ -233,6 +234,7 @@ class ATACVAE(VAEBase):
         nbatches: Number of experimental batches.
         n_latent_dim: Number of latent dimensions.
         encoder_n_layers: Number of hidden layers in the encoder.
+        hidden_width_factor: Scaling factor for the width of the hidden layers.
         encoder_dropout: Dropout probability in the encoder.
         decoder_n_layers: Number of hidden layers in the decoder.
         decoder_dropout: Dropout probability in the decoder.
@@ -246,6 +248,7 @@ class ATACVAE(VAEBase):
         nbatches: int,
         n_latent_dim: int,
         encoder_n_layers: int,
+        hidden_width_factor: float = 1.0,
         encoder_dropout: float = 0.1,
         decoder_n_layers: int | None = None,
         decoder_dropout: float | None = None,
