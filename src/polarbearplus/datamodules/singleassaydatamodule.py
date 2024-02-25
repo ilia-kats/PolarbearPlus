@@ -70,7 +70,6 @@ class _DataModuleBase(L.LightningDataModule):
         n_workers: int = 0,
         pin_memory: bool = False,
         data_dir: str = "./data/snareseq",
-        seed: int = 42,
     ):
         super().__init__()
 
@@ -78,7 +77,6 @@ class _DataModuleBase(L.LightningDataModule):
         self._n_workers = n_workers
         self._pin_memory = pin_memory
 
-        self._seed = seed
         self._data_dir = data_dir
         self._dset_train = self._dset_test = self._dset_val = None
 
@@ -129,7 +127,6 @@ class AtacDataModule(_DataModuleBase):
         n_workers: Number of dataloader workers.
         pin_memory: Whether to use pinned memory.
         data_dir: directory to save all files
-        seed: set a random seed for train/val/test split
     """
 
     _files = {
@@ -146,9 +143,8 @@ class AtacDataModule(_DataModuleBase):
         n_workers: int = 0,
         pin_memory: bool = False,
         data_dir: str = "./data/snareseq",
-        seed: int = 42,
     ):
-        super().__init__(batch_size, n_workers, pin_memory, data_dir, seed)
+        super().__init__(batch_size, n_workers, pin_memory, data_dir)
         self._num_cells = None
         self._num_genes = None
         self._chr_idx = None
@@ -198,9 +194,7 @@ class AtacDataModule(_DataModuleBase):
             )
 
             dset = SparseDataset(counts, batch_info)
-            self._dset_train, self._dset_val, self._dset_test = random_split(
-                dset, [0.6, 0.2, 0.2], generator=torch.Generator().manual_seed(self._seed)
-            )
+            self._dset_train, self._dset_val, self._dset_test = random_split(dset, [0.6, 0.2, 0.2])
 
             self._num_cells = counts.shape[0]
             self._num_peaks = counts.shape[1]
@@ -236,7 +230,6 @@ class RnaDataModule(_DataModuleBase):
         n_workers: Number of dataloader workers.
         pin_memory: Whether to use pinned memory.
         data_dir: directory to save all files
-        seed: set a random seed for train/val/test split
     """
 
     _files = {
@@ -253,9 +246,8 @@ class RnaDataModule(_DataModuleBase):
         n_workers: int = 0,
         pin_memory: bool = False,
         data_dir: str = "./data/snareseq",
-        seed: int = 42,
     ):
-        super().__init__(batch_size, n_workers, pin_memory, data_dir, seed)
+        super().__init__(batch_size, n_workers, pin_memory, data_dir)
         self._num_cells = None
         self._num_genes = None
         self._genes = None
@@ -320,9 +312,7 @@ class RnaDataModule(_DataModuleBase):
             self._genes = pd.read_csv(os.path.join(self._data_dir, self._files["genenames"]), sep="\t", header=None)
 
             dset = SparseDataset(counts, batch_info)
-            self._dset_train, self._dset_val, self._dset_test = random_split(
-                dset, [0.6, 0.2, 0.2], generator=torch.Generator().manual_seed(self._seed)
-            )
+            self._dset_train, self._dset_val, self._dset_test = random_split(dset, [0.6, 0.2, 0.2])
 
             # Compute mean and variance of library size for each batch
             library_size1, library_size2 = np.log(rna_counts1.sum(axis=1).A1), np.log(rna_counts2.sum(axis=1).A1)
