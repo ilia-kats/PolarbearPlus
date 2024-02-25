@@ -35,6 +35,8 @@ dev = [
     "pre-commit",
     "twine>=4.0.2",
 ]
+datamodules = ["scipy"]
+scripts = ["jsonargparse[signatures]"]
 doc = [
     "docutils>=0.8,!=0.18.*,!=0.19.*",
     "sphinx>=4",
