@@ -296,7 +296,6 @@ class AtacDataModuleSplit(_DataModuleBase):
                 atac_counts1[train.indices], torch.zeros(len(train.indices), dtype=torch.int64)
             )
             self._dset_train = ConcatDataset([snare_train_dset, single_dset])
-            print(len(self._dset_train), len(self._dset_val), len(self._dset_test))
 
             self._num_cells = len(snare_dset) + len(single_dset)
             self._num_peaks = atac_counts1.shape[1]
