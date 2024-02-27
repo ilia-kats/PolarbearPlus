@@ -68,6 +68,7 @@ class _DataModuleBase(L.LightningDataModule):
         batch_size: int,
         n_workers: int = 0,
         pin_memory: bool = False,
+        persistent_workers: bool = False,
         data_dir: str = "./data/snareseq",
     ):
         super().__init__()
@@ -75,6 +76,7 @@ class _DataModuleBase(L.LightningDataModule):
         self._batch_size = batch_size
         self._n_workers = n_workers
         self._pin_memory = pin_memory
+        self._persistent_workers = persistent_workers
 
         self._data_dir = data_dir
         self._dset_train = self._dset_test = self._dset_val = None
@@ -93,7 +95,13 @@ class _DataModuleBase(L.LightningDataModule):
                 _download(url, filepath, filedesc)
 
     def _get_dataloader(self, dset):
-        return DataLoader(dset, batch_size=self._batch_size, num_workers=self._n_workers, pin_memory=self._pin_memory)
+        return DataLoader(
+            dset,
+            batch_size=self._batch_size,
+            num_workers=self._n_workers,
+            pin_memory=self._pin_memory,
+            persistent_workers=self._persistent_workers,
+        )
 
     def train_dataloader(self):
         """Train dataloader."""
@@ -125,6 +133,7 @@ class AtacDataModule(_DataModuleBase):
         batch_size: Minibatch size.
         n_workers: Number of dataloader workers.
         pin_memory: Whether to use pinned memory.
+        persistent_workers: Whether to not shut down the worker processes after every epoch.
         data_dir: directory to save all files
     """
 
@@ -141,9 +150,10 @@ class AtacDataModule(_DataModuleBase):
         batch_size: int,
         n_workers: int = 0,
         pin_memory: bool = False,
+        persistent_workers: bool = False,
         data_dir: str = "./data/snareseq",
     ):
-        super().__init__(batch_size, n_workers, pin_memory, data_dir)
+        super().__init__(batch_size, n_workers, pin_memory, persistent_workers, data_dir)
         self._num_cells = None
         self._num_genes = None
         self._chr_idx = None
@@ -221,6 +231,7 @@ class RnaDataModule(_DataModuleBase):
         batch_size: Minibatch size.
         n_workers: Number of dataloader workers.
         pin_memory: Whether to use pinned memory.
+        persistent_workers: Whether to not shut down the worker processes after every epoch.
         data_dir: directory to save all files
     """
 
@@ -237,9 +248,10 @@ class RnaDataModule(_DataModuleBase):
         batch_size: int,
         n_workers: int = 0,
         pin_memory: bool = False,
+        persistent_workers: bool = False,
         data_dir: str = "./data/snareseq",
     ):
-        super().__init__(batch_size, n_workers, pin_memory, data_dir)
+        super().__init__(batch_size, n_workers, pin_memory, persistent_workers, data_dir)
         self._num_cells = None
         self._num_genes = None
         self._genes = None
