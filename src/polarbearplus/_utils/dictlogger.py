@@ -1,5 +1,7 @@
+import atexit
 import os
 import pickle
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -19,12 +21,16 @@ class _History(dict):
 
 
 class DictLogger(Logger):
-    def __init__(self, name: str | None = None, version: str | None = None, save_dir: str = "."):
+    def __init__(self, save_dir: str | Path, name: str | None = None, version: str | None = None):
+        super().__init__()
         self._name = name
         self._version = version
         self._savedir = save_dir
         self.hyperparams = {}
         self.history = _History()
+        self._needFullLog = True
+
+        atexit.register(self._fullog)
 
     @property
     def name(self):
@@ -47,11 +53,27 @@ class DictLogger(Logger):
         for k, v in metrics.items():
             self.history[k].loc[step] = v
 
-    def after_save_checkpoint(self, checkpoint_callback):
-        filename = os.path.basename(os.path.splitext(checkpoint_callback.last_model_path)[0])
-        filename = os.path.join(self._savedir, f"{filename}_{self.name}_{self.version}_log.pkl")
+    def _save(self, filename):
         with open(filename, "wb") as f:
             pickle.dump(
-                {"history": self.history, "hyperparams": self.hyperparams, "name": self.name, "version": self.version},
+                {
+                    "history": dict(self.history),
+                    "hyperparams": self.hyperparams,
+                    "name": self.name,
+                    "version": self.version,
+                },
                 f,
             )
+
+    def _fullog(self):
+        if self._needFullLog and hasattr(self, "_savedir"):
+            self._save(os.path.join(self._savedir, "full_log.pkl"))
+            self._needFullLog = False
+
+    def __del__(self):
+        self._fullog()
+
+    def after_save_checkpoint(self, checkpoint_callback):
+        filename = os.path.basename(os.path.splitext(checkpoint_callback._last_checkpoint_saved)[0])
+        filename = os.path.join(self._savedir, f"{filename}_{self.name}_{self.version}_log.pkl")
+        self._save(filename)
