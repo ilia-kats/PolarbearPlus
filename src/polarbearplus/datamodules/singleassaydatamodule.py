@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.io import mmread
-from scipy.sparse import vstack
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
 from tqdm.auto import tqdm
 
@@ -179,123 +178,17 @@ class AtacDataModule(_DataModuleBase):
         """Load Dataset and assign train/val/test datasets for use in dataloaders."""
         if self._chr_idx is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
             _logger.info("reading data...")
-            atac_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"]))
-            atac_counts2 = mmread(os.path.join(self._data_dir, self._files["single"]))
-            # concatenate along cell dimension, first g columns correspond to genes, last p columns correspond to peaks
-            counts = vstack((atac_counts1, atac_counts2)).tocsr().astype(np.float32)
-            counts.data[:] = 1
-
-            # create batch index for the two data sets
-            batch_info = torch.cat(
-                (
-                    torch.zeros(atac_counts1.shape[0], dtype=torch.int64),
-                    torch.ones(atac_counts2.shape[0], dtype=torch.int64),
-                )
-            )
-
-            dset = SparseDataset(counts, batch_info)
-            self._dset_train, self._dset_val, self._dset_test = random_split(dset, [0.6, 0.2, 0.2])
-
-            self._num_cells = counts.shape[0]
-            self._num_peaks = counts.shape[1]
-            peaks = pd.read_table(
-                os.path.join(self._data_dir, self._files["peak_annotation"]),
-                sep=":",
-                header=None,
-                names=["chr", "range"],
-            )
-            chromosomes, peak_indices, peak_counts = np.unique(
-                peaks.chr.to_numpy(), return_index=True, return_counts=True
-            )
-            chrorder = np.argsort(peak_indices)
-            chromosomes, peak_indices, peak_counts = (
-                chromosomes[chrorder],
-                peak_indices[chrorder],
-                peak_counts[chrorder],
-            )
-            self._chr_idx = [(idx, idx + cnt) for idx, cnt in zip(peak_indices, peak_counts, strict=False)]
-
-
-class AtacDataModuleSplit(_DataModuleBase):
-    """Data Module for single assay ATAC-seq data.
-
-    The Data Module downloads the data from the base_url and prepares the train/val/test split.
-    There is one co-assays dataset "SNARE-seq" and one single assay dataset "ATAC-seq".
-    The peaks are shared between the two datasets. Each data set corresponds to one batch.
-    We concatenate the two datasets along the cell dimension and we add a vector of batch indices
-    to the output of our TensorDataset.
-
-    Args:
-        batch_size: Minibatch size.
-        n_workers: Number of dataloader workers.
-        pin_memory: Whether to use pinned memory.
-        data_dir: directory to save all files
-    """
-
-    _files = {
-        "single": "adultbrainfull50_atac_outer_single.mtx",
-        "snareseq": "adultbrainfull50_atac_outer_snareseq.mtx",
-        "snareseq_barcodes": "adultbrainfull50_atac_outer_snareseq_barcodes.tsv",
-        "single_barcodes": "adultbrainfull50_atac_outer_single_barcodes.tsv",
-        "peak_annotation": "adultbrainfull50_atac_outer_peaks.txt",
-    }
-
-    def __init__(
-        self,
-        batch_size: int,
-        n_workers: int = 0,
-        pin_memory: bool = False,
-        data_dir: str = "./data/snareseq",
-    ):
-        super().__init__(batch_size, n_workers, pin_memory, data_dir)
-        self._num_cells = None
-        self._num_genes = None
-        self._chr_idx = None
-
-    @property
-    def num_peaks(self):
-        """Number of peaks in the dataset."""
-        if self._num_peaks is None:
-            self._init()
-        return self._num_peaks
-
-    @property
-    def num_cells(self):
-        """Number of cells in the dataset."""
-        if self._num_cells is None:
-            self._init()
-        return self._num_cells
-
-    @property
-    def num_batches(self):
-        """Number of experimental batches (datasets)."""
-        return 2
-
-    @property
-    def chromosome_indices(self):
-        """List of index ranges in the data matrix belonging to separate chromosomes."""
-        if self._chr_idx is None:
-            self._init()
-        return self._chr_idx
-
-    def setup(self, stage: str | None = None):
-        """Load Dataset and assign train/val/test datasets for use in dataloaders."""
-        if self._chr_idx is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
-            _logger.info("reading data...")
             atac_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"])).tocsr().astype(np.float32)
             atac_counts2 = mmread(os.path.join(self._data_dir, self._files["single"])).tocsr().astype(np.float32)
             atac_counts1.data[:], atac_counts2.data[:] = 1, 1
 
             # create a random split of the co-assay data
             snare_dset = SparseDataset(atac_counts1, torch.zeros(atac_counts1.shape[0], dtype=torch.int64))
-            train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
+            snare_train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
 
             # add the single assay dataset to the training set
             single_dset = SparseDataset(atac_counts2, torch.ones(atac_counts2.shape[0], dtype=torch.int64))
-            snare_train_dset = SparseDataset(
-                atac_counts1[train.indices], torch.zeros(len(train.indices), dtype=torch.int64)
-            )
-            self._dset_train = ConcatDataset([snare_train_dset, single_dset])
+            self._dset_train = ConcatDataset([snare_train, single_dset])
 
             self._num_cells = len(snare_dset) + len(single_dset)
             self._num_peaks = atac_counts1.shape[1]
@@ -315,7 +208,7 @@ class AtacDataModuleSplit(_DataModuleBase):
             self._chr_idx = [(idx, idx + cnt) for idx, cnt in zip(peak_indices, peak_counts, strict=False)]
 
 
-class RnaDataModuleSplit(_DataModuleBase):
+class RnaDataModule(_DataModuleBase):
     """Data Module for single assay RNA-seq data.
 
     The Data Module downloads the data from the base_url and prepares the train/val/test split.
@@ -402,122 +295,15 @@ class RnaDataModuleSplit(_DataModuleBase):
 
             # create a random split of the co-assay data
             snare_dset = SparseDataset(rna_counts1, torch.zeros(rna_counts1.shape[0], dtype=torch.int64))
-            train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
+            snare_train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
 
             # add the single assay dataset to the training set
             single_dset = SparseDataset(rna_counts2, torch.ones(rna_counts2.shape[0], dtype=torch.int64))
-            snare_train_dset = SparseDataset(
-                rna_counts1[train.indices], torch.zeros(len(train.indices), dtype=torch.int64)
-            )
-            self._dset_train = ConcatDataset([snare_train_dset, single_dset])
+            self._dset_train = ConcatDataset([snare_train, single_dset])
 
             self._num_cells = len(snare_dset) + len(single_dset)
             self._num_genes = rna_counts1.shape[1]
             self._genes = pd.read_csv(os.path.join(self._data_dir, self._files["genenames"]), sep="\t", header=None)
-
-            # Compute mean and variance of library size for each batch
-            library_size1, library_size2 = np.log(rna_counts1.sum(axis=1).A1), np.log(rna_counts2.sum(axis=1).A1)
-            self._logbatchmean = np.array([library_size1.mean(), library_size2.mean()])
-            self._logbatchvar = np.array([library_size1.var(), library_size2.var()])
-
-
-class RnaDataModule(_DataModuleBase):
-    """Data Module for single assay RNA-seq data.
-
-    The Data Module downloads the data from the base_url and prepares the train/val/test split.
-    There is one co-assays dataset "SNARE-seq" and one single assay dataset "RNA-seq".
-    The genes are shared between the two datasets. Each data set corresponds to one batch.
-    We concatenate the two datasets along the cell dimension and we add a vector of batch indices
-    to the output of our TensorDataset.
-
-    Args:
-        batch_size: Minibatch size.
-        n_workers: Number of dataloader workers.
-        pin_memory: Whether to use pinned memory.
-        data_dir: directory to save all files
-    """
-
-    _files = {
-        "snareseq": "adultbrainfull50_rna_outer_snareseq.mtx",  # SNARE-seq
-        "single": "adultbrainfull50_rna_outer_single.mtx",  # Single assay RNA-seq
-        "snareseq_barcodes": "adultbrainfull50_rna_outer_snareseq_barcodes.tsv",  # SNARE-seq cells
-        "single_barcodes": "adultbrainfull50_rna_outer_single_barcodes.tsv",  # single assay cells
-        "genenames": "adultbrainfull50_rna_outer_genes.txt",
-    }
-
-    def __init__(
-        self,
-        batch_size: int,
-        n_workers: int = 0,
-        pin_memory: bool = False,
-        data_dir: str = "./data/snareseq",
-    ):
-        super().__init__(batch_size, n_workers, pin_memory, data_dir)
-        self._num_cells = None
-        self._num_genes = None
-        self._genes = None
-        self._logbatchmean = None
-        self._logbatchvar = None
-
-    @property
-    def num_genes(self):
-        """Number of genes in dataset."""
-        if self._num_genes is None:
-            self._init()
-        return self._num_genes
-
-    @property
-    def num_cells(self):
-        """Number of cells in dataset."""
-        if self._num_cells is None:
-            self._init()
-        return self._num_cells
-
-    @property
-    def num_batches(self):
-        """Number of experimental batches (datasets)."""
-        return 2
-
-    @property
-    def genes(self):
-        """Gene Metadata."""
-        if self._genes is None:
-            self._init()
-        return self._genes
-
-    @property
-    def logbatchmean(self):
-        """Mean of library size for each batch."""
-        if self._logbatchmean is None:
-            self._init()
-        return self._logbatchmean
-
-    @property
-    def logbatchvar(self):
-        """Variance of library size for each batch."""
-        if self._logbatchvar is None:
-            self._init()
-        return self._logbatchvar
-
-    def setup(self, stage: str | None = None):
-        """Load Dataset and assign train/val/test datasets for use in dataloaders."""
-        if self._genes is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
-            _logger.info("reading data...")
-            rna_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"]))
-            rna_counts2 = mmread(os.path.join(self._data_dir, self._files["single"]))
-            counts = vstack((rna_counts1, rna_counts2)).tocsr().astype(np.float32)
-            batch_info = torch.cat(
-                (
-                    torch.zeros(rna_counts1.shape[0], dtype=torch.int64),
-                    torch.ones(rna_counts2.shape[0], dtype=torch.int64),
-                )
-            )
-            self._num_cells = counts.shape[0]
-            self._num_genes = counts.shape[1]
-            self._genes = pd.read_csv(os.path.join(self._data_dir, self._files["genenames"]), sep="\t", header=None)
-
-            dset = SparseDataset(counts, batch_info)
-            self._dset_train, self._dset_val, self._dset_test = random_split(dset, [0.6, 0.2, 0.2])
 
             # Compute mean and variance of library size for each batch
             library_size1, library_size2 = np.log(rna_counts1.sum(axis=1).A1), np.log(rna_counts2.sum(axis=1).A1)
