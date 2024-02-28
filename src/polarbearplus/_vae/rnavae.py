@@ -41,6 +41,7 @@ class _RNAVAE(PyroModule):
         decoder_n_layers: int | None = None,
         decoder_layer_width: int | None = None,
         decoder_dropout: float | None = None,
+        eps: float = 1e-3,
     ):
         super().__init__()
 
@@ -52,6 +53,7 @@ class _RNAVAE(PyroModule):
 
         self.register_buffer("zero", torch.as_tensor(0.0))
         self.register_buffer("one", torch.as_tensor(1.0))
+        self.register_buffer("eps", torch.as_tensor(eps))
 
         self.encoder = MLP(ngenes + nbatches, 2 * n_latent_dim, encoder_layer_width, encoder_n_layers, encoder_dropout)
 
@@ -70,8 +72,11 @@ class _RNAVAE(PyroModule):
             last_activation=nn.Softmax(dim=-1),
         )
         self._l_encoder = MLP(ngenes + nbatches, 2, encoder_layer_width, 1, encoder_dropout)
+        torch.nn.init.zeros_(self._l_encoder[-1].weight)
 
-        self.theta = PyroParam(torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.positive)
+        self.theta = PyroParam(
+            torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.interval(0.0, 1 / eps)
+        )
 
     def get_extra_state(self):
         return {"ngenes": self.ngenes, "nbatches": self.nbatches, "n_latent_dim": self.n_latent_dim}
@@ -107,7 +112,9 @@ class _RNAVAE(PyroModule):
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
             with pyro.plate("genes", size=self.ngenes, dim=-1):
                 pyro.sample(
-                    "data", dist.GammaPoisson(concentration=1 / theta_b, rate=1 / (theta_b * mu)), obs=expression_mat
+                    "data",
+                    dist.GammaPoisson(concentration=1 / (theta_b + self.eps), rate=1 / (theta_b * mu + self.eps)),
+                    obs=expression_mat,
                 )
 
     def encode(self, expression_mat: ArrayLike, batch_idx: ArrayLike, latentonly: bool = True):
@@ -123,7 +130,9 @@ class _RNAVAE(PyroModule):
             tuple with means and standard deviations of the latent Normal, followed by locations and scales of the
             LogNormal size factor distribution.
         """
-        concat = torch.cat((expression_mat, F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1)
+        concat = torch.cat(
+            (torch.log1p(expression_mat), F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1
+        )
         encoded = self.encoder(concat)
         latent_means = encoded[:, : self.n_latent_dim]
         latent_stdevs = encoded[:, self.n_latent_dim :].exp()
@@ -147,9 +156,11 @@ class _RNAVAE(PyroModule):
             expression_mat, batch_idx, latentonly=False
         )
         with pyro.plate("cells", size=expression_mat.shape[0], dim=-2):
-            pyro.sample("l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None]))  # (ncells, 1)
+            pyro.sample(
+                "l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None] + self.eps)
+            )  # (ncells, 1)
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))  # (ncells, nlatent)
+                pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs + self.eps))  # (ncells, nlatent)
 
 
 class RNAVAE(VAEBase):
@@ -169,6 +180,7 @@ class RNAVAE(VAEBase):
         decoder_dropout: Dropout probability in the decoder.
         lr: Learning rate.
         beta: The scaling factor for the KL divergence.
+        eps: Small value for numerical stability.
     """
 
     def __init__(
@@ -186,6 +198,7 @@ class RNAVAE(VAEBase):
         decoder_dropout: float | None = None,
         lr: float = 1e-3,
         beta: float = 1,
+        eps: float = 1e-3,
     ):
         super().__init__(
             _RNAVAE,
@@ -202,4 +215,5 @@ class RNAVAE(VAEBase):
             decoder_n_layers=decoder_n_layers,
             decoder_layer_width=decoder_layer_width,
             decoder_dropout=decoder_dropout,
+            eps=eps,
         )
