@@ -94,9 +94,10 @@ class _DataModuleBase(L.LightningDataModule):
                 os.makedirs(self._data_dir, exist_ok=True)
                 _download(url, filepath, filedesc)
 
-    def _get_dataloader(self, dset):
+    def _get_dataloader(self, dset, shuffle=False):
         return DataLoader(
             dset,
+            shuffle=shuffle,
             batch_size=self._batch_size,
             num_workers=self._n_workers,
             pin_memory=self._pin_memory,
@@ -105,7 +106,7 @@ class _DataModuleBase(L.LightningDataModule):
 
     def train_dataloader(self):
         """Train dataloader."""
-        return self._get_dataloader(self._dset_train)
+        return self._get_dataloader(self._dset_train, True)
 
     def val_dataloader(self):
         """Validation dataloader."""
