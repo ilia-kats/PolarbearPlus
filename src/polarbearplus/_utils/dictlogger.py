@@ -21,11 +21,18 @@ class _History(dict):
 
 
 class DictLogger(Logger):
-    def __init__(self, save_dir: str | Path, name: str | None = None, version: str | None = None):
+    def __init__(
+        self,
+        save_dir: str | Path | None = None,
+        filename: str = "log.pkl",
+        name: str | None = None,
+        version: str | None = None,
+    ):
         super().__init__()
         self._name = name
         self._version = version
         self._savedir = save_dir
+        self._filename = filename
         self.hyperparams = {}
         self.history = _History()
         self._needFullLog = True
@@ -53,8 +60,8 @@ class DictLogger(Logger):
         for k, v in metrics.items():
             self.history[k].loc[step] = v
 
-    def _save(self, filename):
-        with open(filename, "wb") as f:
+    def _save(self):
+        with open(os.path.join(self._savedir, self._filename), "wb") as f:
             pickle.dump(
                 {
                     "history": dict(self.history),
@@ -66,14 +73,12 @@ class DictLogger(Logger):
             )
 
     def _fullog(self):
-        if self._needFullLog and hasattr(self, "_savedir"):
-            self._save(os.path.join(self._savedir, "full_log.pkl"))
+        if self._needFullLog and self._savedir is not None:
+            self._save()
             self._needFullLog = False
 
     def __del__(self):
         self._fullog()
 
     def after_save_checkpoint(self, checkpoint_callback):
-        filename = os.path.basename(os.path.splitext(checkpoint_callback._last_checkpoint_saved)[0])
-        filename = os.path.join(self._savedir, f"{filename}_{self.name}_{self.version}_log.pkl")
-        self._save(filename)
+        self._save()
