@@ -209,7 +209,9 @@ class AtacDataModule(_DataModuleBase):
                 header=None,
                 names=["chr", "range"],
             )
-            chromosomes, peak_indices, peak_counts = np.unique(peaks.chr.to_numpy(), a=True, return_counts=True)
+            chromosomes, peak_indices, peak_counts = np.unique(
+                peaks.chr.to_numpy(), return_index=True, return_counts=True
+            )
             chrorder = np.argsort(peak_indices)
             chromosomes, peak_indices, peak_counts = (
                 chromosomes[chrorder],
