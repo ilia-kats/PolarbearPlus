@@ -33,6 +33,8 @@ class _Encoder(nn.Module):
         n_layers: int,
         dropout: float = 0.1,
         hidden_width_factor: float = 1.0,
+        noutputs: int = 1,
+        last_activation: type[nn.Module] | nn.Module | None = None,
     ):
         super().__init__()
 
@@ -52,7 +54,15 @@ class _Encoder(nn.Module):
                 )
             )
 
-        self._output = nn.Sequential(nn.Linear(len(chr_idx) * output_dim, 2 * output_dim))
+        output = nn.Linear(len(chr_idx) * output_dim, noutputs * output_dim)
+        nn.init.kaiming_normal_(output.weight)
+        nn.init.zeros_(output.bias)
+        self._output = nn.Sequential(output)
+        if last_activation is not None:
+            if isinstance(last_activation, nn.Module):
+                self._output.append(last_activation)
+            else:
+                self._output.append(last_activation())
 
     def forward(self, x, conditions):
         return self._output(
@@ -160,16 +170,33 @@ class _ATACVAE(PyroModule):
             decoder_n_layers = encoder_n_layers
         if decoder_dropout is None:
             decoder_dropout = encoder_dropout
-        self.encoder = _Encoder(nbatches, chr_idx, n_latent_dim, encoder_n_layers, encoder_dropout, hidden_width_factor)
-        self.decoder = _Decoder(nbatches, chr_idx, n_latent_dim, decoder_n_layers, decoder_dropout, hidden_width_factor)
-        self._l_encoder = MLP(
-            self.nregions + nbatches,
-            1,
-            int((self.nregions * n_latent_dim) ** 0.5 * hidden_width_factor),
-            encoder_n_layers,
-            encoder_dropout,
+        self.encoder = _Encoder(
+            nconditions=nbatches,
+            chr_idx=chr_idx,
+            output_dim=n_latent_dim,
+            n_layers=encoder_n_layers,
+            dropout=encoder_dropout,
+            hidden_width_factor=hidden_width_factor,
+            noutputs=2,
+        )
+        self.decoder = _Decoder(
+            nconditions=nbatches,
+            chr_idx=chr_idx,
+            input_dim=n_latent_dim,
+            n_layers=decoder_n_layers,
+            dropout=decoder_dropout,
+            hidden_width_factor=hidden_width_factor,
+        )
+        self._l_encoder = _Encoder(
+            nconditions=nbatches,
+            chr_idx=chr_idx,
+            output_dim=1,
+            n_layers=encoder_n_layers,
+            dropout=encoder_dropout,
+            hidden_width_factor=hidden_width_factor,
             last_activation=nn.Sigmoid,
         )
+        # torch.nn.init.zeros_(self._l_encoder[-2].weight)
 
         self.r = PyroParam(torch.randn((self.nregions,)).sigmoid(), constraint=constraints.interval(0, 1))
 
@@ -181,11 +208,16 @@ class _ATACVAE(PyroModule):
         self.nbatches = state["nbatches"]
         self.n_latent_dim = state["n_latent_dim"]
 
-    def encode(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+    def encode(self, region_mat: ArrayLike, batch_idx: ArrayLike, latentonly: bool = True):
         latents = self.encoder(region_mat, batch_idx)
         latent_means = latents[:, : self.n_latent_dim]
         latent_stdevs = latents[:, self.n_latent_dim :].exp()
-        return latent_means, latent_stdevs
+
+        if not latentonly:
+            l_n = self._l_encoder(region_mat, batch_idx)  # (ncells, 1)
+            return latent_means, latent_stdevs, l_n
+        else:
+            return latent_means, latent_stdevs
 
     def model(self, region_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
         """Generative model.
@@ -199,19 +231,21 @@ class _ATACVAE(PyroModule):
             raise ValueError("Need either region_mat or ncells, but both are None.")
         if ncells is None:
             ncells = region_mat.shape[0]
-        if region_mat is not None:
-            concat = torch.cat((region_mat, F.one_hot(batch_idx, self.nbatches).to(region_mat.dtype)), -1)
-            l_n = self._l_encoder(concat)  # (ncells, 1)
-        else:
-            l_n = torch.ones((ncells, 1))  # (ncells, 1)
+
         with pyro.plate("cells", size=ncells, dim=-2):
+            # this will be replaced by the encoded l_n from the guide during inference
+            # can't use pyro.deterministic because that sets is_observed=True, so won't
+            # be replaced by guide value. We want l_n in the trace for analysis
+            l_n = pyro.sample("l_n", dist.Delta(self.one).mask(region_mat is None))  # (ncells, 1)
+
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
             y_n = self.decoder(z_n, batch_idx)  # (ncells, nregions)
 
+            probs = pyro.deterministic("mu", y_n * l_n * self.r)
             with pyro.plate("regions", size=self.nregions, dim=-1):
-                pyro.sample("data", dist.Bernoulli(probs=y_n * l_n * self.r), obs=region_mat)
+                pyro.sample("data", dist.Bernoulli(probs=probs), obs=region_mat)
 
     def guide(self, region_mat: ArrayLike | None, batch_idx: ArrayLike):
         """Variational posterior.
@@ -220,8 +254,9 @@ class _ATACVAE(PyroModule):
             region_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        latent_means, latent_stdevs = self.encode(region_mat, batch_idx)
-        with pyro.plate("cells", size=region_mat.shape[0], dim=-2):  # noqa SIM117
+        latent_means, latent_stdevs, l_n = self.encode(region_mat, batch_idx, latentonly=False)
+        with pyro.plate("cells", size=region_mat.shape[0], dim=-2):  # SIM117
+            pyro.sample("l_n", dist.Delta(l_n))
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))
 
