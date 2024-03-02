@@ -53,7 +53,7 @@ class DictLogger(Logger):
 
     @rank_zero_only
     def log_hyperparams(self, params: dict[str, Any]):
-        self.hyperparams = params
+        self.hyperparams = dict(params)
 
     @rank_zero_only
     def log_metrics(self, metrics: dict[str, float], step: int):
