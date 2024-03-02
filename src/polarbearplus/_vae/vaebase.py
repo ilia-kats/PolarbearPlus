@@ -40,7 +40,8 @@ class VAEBase(L.LightningModule):
         return torch.optim.Adam(self._vae.parameters(), lr=self._lr)
 
     def _step(self, batch, batch_idx, dataloader_idx=0, log_name="elbo"):
-        elbo = self._elbo(*batch) / (batch[0].shape[0] * batch[0].shape[1])
+        with self.device:
+            elbo = self._elbo(*batch) / (batch[0].shape[0] * batch[0].shape[1])
         self.log(log_name, elbo, on_step=True, on_epoch=True)
         return elbo
 
