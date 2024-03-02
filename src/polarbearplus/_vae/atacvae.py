@@ -239,7 +239,10 @@ class ATACVAE(VAEBase):
         decoder_n_layers: Number of hidden layers in the decoder.
         decoder_dropout: Dropout probability in the decoder.
         lr: Learning rate.
-        beta: The scaling factor for the KL divergence.
+        beta: The scaling factor for the KL divergence. If a `float`, the scaling will stay constant.
+            If a `tuple[float, float, int, int]`, the first entry is the starting value, the second
+            entry the final value, the third entry the epoch at which the penalty starts to increase,
+            and the fourth entry the number of epochs until the final value is reached.
     """
 
     def __init__(
@@ -253,7 +256,7 @@ class ATACVAE(VAEBase):
         decoder_n_layers: int | None = None,
         decoder_dropout: float | None = None,
         lr: float = 1e-3,
-        beta: float = 1,
+        beta: float | tuple[float, float, int, int] = 1,
     ):
         super().__init__(
             _ATACVAE,
