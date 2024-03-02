@@ -30,6 +30,7 @@ trainer:
         mode: min
         save_top_k: 1
         save_on_train_epoch_end: false
+        save_last: link
   logger:
     class_path: polarbearplus.DictLogger
     init_args:

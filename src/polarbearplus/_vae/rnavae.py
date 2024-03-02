@@ -106,9 +106,9 @@ class _RNAVAE(PyroModule):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
             z_n = torch.cat((z_n, F.one_hot(batch_idx, self.nbatches).to(z_n.dtype)), -1)
-            rho_n = self.decoder(z_n)  # (ncells, ngenes)
+            rho_n = pyro.deterministic("rho_n", self.decoder(z_n))  # (ncells, ngenes)
 
-            mu = l_n * rho_n
+            mu = pyro.deterministic("mu", l_n * rho_n)
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
             with pyro.plate("genes", size=self.ngenes, dim=-1):
                 pyro.sample(
