@@ -7,8 +7,8 @@ from torch import nn
 from torch.distributions import constraints
 from torch.nn import functional as F
 
-from .mlp import MLP
-from .vaebase import VAEBase
+from .._utils import MLP
+from .vaebase import LightningVAEBase
 
 
 class _Encoder(nn.Module):
@@ -162,7 +162,7 @@ class _ATACVAE(PyroModule):
 
         if n_latent_dim is None:
             n_latent_dim = int(self.nregions**0.25)
-        self.n_latent_dim = n_latent_dim
+        self._n_latent_dim = n_latent_dim
         self.register_buffer("zero", torch.as_tensor(0.0))
         self.register_buffer("one", torch.as_tensor(1.0))
 
@@ -170,7 +170,7 @@ class _ATACVAE(PyroModule):
             decoder_n_layers = encoder_n_layers
         if decoder_dropout is None:
             decoder_dropout = encoder_dropout
-        self.encoder = _Encoder(
+        self._encoder = _Encoder(
             nconditions=nbatches,
             chr_idx=chr_idx,
             output_dim=n_latent_dim,
@@ -179,7 +179,7 @@ class _ATACVAE(PyroModule):
             hidden_width_factor=hidden_width_factor,
             noutputs=2,
         )
-        self.decoder = _Decoder(
+        self._decoder = _Decoder(
             nconditions=nbatches,
             chr_idx=chr_idx,
             input_dim=n_latent_dim,
@@ -200,24 +200,55 @@ class _ATACVAE(PyroModule):
 
         self.r = PyroParam(torch.randn((self.nregions,)).sigmoid(), constraint=constraints.interval(0, 1))
 
+    @property
+    def encoder(self):
+        return self._encoder
+
+    @property
+    def decoder(self):
+        return self._decoder
+
+    @property
+    def n_latent_dim(self):
+        return self._n_latent_dim
+
     def get_extra_state(self):
-        return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self.n_latent_dim}
+        return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
     def set_extra_state(self, state):
         self.nregions = state["nregions"]
         self.nbatches = state["nbatches"]
-        self.n_latent_dim = state["n_latent_dim"]
+        self._n_latent_dim = state["n_latent_dim"]
 
-    def encode(self, region_mat: ArrayLike, batch_idx: ArrayLike, latentonly: bool = True):
-        latents = self.encoder(region_mat, batch_idx)
+    def encode_latent(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+        """Apply the encoder network.
+
+        Args:
+            region_mat: Cells x genes expression matrix.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A two-element tuple with means and standard deviations, each of size n_cells x 1.
+        """
+        latents = self._encoder(region_mat, batch_idx)
         latent_means = latents[:, : self.n_latent_dim]
         latent_stdevs = latents[:, self.n_latent_dim :].exp()
 
-        if not latentonly:
-            l_n = self._l_encoder(region_mat, batch_idx)  # (ncells, 1)
-            return latent_means, latent_stdevs, l_n
-        else:
-            return latent_means, latent_stdevs
+        return latent_means, latent_stdevs
+
+    def encode_auxiliary(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+        """Encode auxiliary variables.
+
+        In this case, auxiliary variables are the cell-specific factors.
+
+        Args:
+            region_mat: Cells x genes expression matrix.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A 1-element tuple with an n_cells x 1 matrix.
+        """
+        return (self._l_encoder(region_mat, batch_idx),)  # (ncells, 1)
 
     def model(self, region_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
         """Generative model.
@@ -241,27 +272,40 @@ class _ATACVAE(PyroModule):
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
-            y_n = self.decoder(z_n, batch_idx)  # (ncells, nregions)
+            y_n = self._decoder(z_n, batch_idx)  # (ncells, nregions)
 
             probs = pyro.deterministic("mu", y_n * l_n * self.r)
             with pyro.plate("regions", size=self.nregions, dim=-1):
                 pyro.sample("data", dist.Bernoulli(probs=probs), obs=region_mat)
 
-    def guide(self, region_mat: ArrayLike | None, batch_idx: ArrayLike):
+    def guide(self, region_mat: ArrayLike, batch_idx: ArrayLike):
         """Variational posterior.
 
         Args:
             region_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        latent_means, latent_stdevs, l_n = self.encode(region_mat, batch_idx, latentonly=False)
-        with pyro.plate("cells", size=region_mat.shape[0], dim=-2):  # SIM117
+        self.reconstruction_guide(
+            *self.encode_latent(region_mat, batch_idx), *self.encode_auxiliary(region_mat, batch_idx)
+        )
+
+    def reconstruction_guide(self, latent_means: ArrayLike, latent_stdevs: ArrayLike, l_n: ArrayLike):
+        """Variational posterior given the encoded data.
+
+        This can be used for translating from another modality.
+
+        Args:
+            latent_means: Cells x latent_vars latent mean matrix.
+            latent_stdevs: Cells x latent_vars latent standard deviation matrix.
+            l_n: Cells x 1 matrix of cell-specific factors.
+        """
+        with pyro.plate("cells", size=latent_means.shape[0], dim=-2):
             pyro.sample("l_n", dist.Delta(l_n))
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))
 
 
-class ATACVAE(VAEBase):
+class ATACVAE(LightningVAEBase):
     """A beta-VAE for scATACseq data.
 
     Args:

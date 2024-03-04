@@ -131,6 +131,8 @@ ignore = [
     "D213",
     # having a proper branching structure makes the code more readable IMO
     "RET505", "RET506", "RET507", "RET508",
+    # relative imports rule
+    "TID252",
 ]
 
 [tool.ruff.lint.pydocstyle]
