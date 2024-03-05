@@ -30,6 +30,12 @@ class MLPTranslator(L.LightningModule):
 
         self.save_hyperparameters(ignore=["sourcevae", "destvae"])
 
+    def state_dict(self):
+        return self._translator.state_dict()
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        self._translator.load_state_dict(state_dict, strict=strict, assign=assign)
+
     def on_validation_model_eval(self):
         self._translator.eval()
 
