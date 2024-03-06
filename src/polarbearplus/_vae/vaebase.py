@@ -1,3 +1,4 @@
+import inspect
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
 from numbers import Real
@@ -64,7 +65,8 @@ class LightningVAEBase(L.LightningModule):
 
         self._beta = beta if isinstance(beta, Real) else _InterpolationParams(*beta)
 
-        self.save_hyperparameters(ignore="modulecls")
+        current_frame = inspect.currentframe()
+        self.save_hyperparameters(frame=current_frame.f_back)
         self._old_module_local_params = None
 
     def setup(self, stage):
