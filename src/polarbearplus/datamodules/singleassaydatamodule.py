@@ -1,127 +1,18 @@
 import logging
 import os
-import urllib.request
 
-import lightning as L
 import numpy as np
 import pandas as pd
 import torch
 from scipy.io import mmread
-from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
-from tqdm.auto import tqdm
+from torch.utils.data import ConcatDataset, StackDataset, random_split
+
+from .utils import PolarbearDataModuleBase, SparseDataset
 
 _logger = logging.getLogger(__name__)
 
 
-class _TqdmDownload(tqdm):
-    def __init__(self, *args, **kwargs):
-        kwargs = dict(kwargs)
-        kwargs.update({"unit": "B", "unit_scale": True, "unit_divisor": 1024})
-        super().__init__(*args, **kwargs)
-
-    def update_to(self, nblocks=1, blocksize=1, total=-1):
-        self.total = total
-        self.update(nblocks * blocksize - self.n)
-
-
-def _download(url, outfile, desc):
-    with _TqdmDownload(desc="downloading " + desc) as t:
-        urllib.request.urlretrieve(url, outfile, t.update_to)  # noqa S310
-
-
-class SparseDataset(Dataset):
-    """ATAC-seq sparse count matrix dataloader.
-
-    The counts are stored in a sparse matrix and the batch info is stored in a tensor.
-    When iterating throught the dataloader, the data is returned as a dense tensor.
-    """
-
-    def __init__(self, counts, batch_info):
-        """Arguments.
-
-        counts: csr matrix
-            sparse matrix of ATAC-seq counts
-        batch_info: torch.Tensor
-            vector of batch info for each cells
-        """
-        self.counts = counts
-        self.batch_info = batch_info
-
-    def __len__(self):
-        """Return the number of cells in the dataset."""
-        return self.counts.shape[0]
-
-    def __getitem__(self, idx):
-        """Return the data and batch info for idx number of samples."""
-        idx = idx.numpy() if torch.is_tensor(idx) else idx
-        data = self.counts[idx, :].toarray()
-        batch = self.batch_info[idx]
-        return data.squeeze(), batch
-
-
-class _DataModuleBase(L.LightningDataModule):
-    _base_url = "https://noble.gs.washington.edu/~ranz0/Polarbear/data/"
-    _files = {}
-
-    def __init__(
-        self,
-        batch_size: int,
-        n_workers: int = 0,
-        pin_memory: bool = False,
-        persistent_workers: bool = False,
-        data_dir: str = "./data/snareseq",
-    ):
-        super().__init__()
-
-        self._batch_size = batch_size
-        self._n_workers = n_workers
-        self._pin_memory = pin_memory
-        self._persistent_workers = persistent_workers
-
-        self._data_dir = data_dir
-        self._dset_train = self._dset_test = self._dset_val = None
-
-    def _init(self):
-        self.prepare_data()
-        self.setup()
-
-    def prepare_data(self):
-        """Download data and prepare train/test/val split."""
-        for filedesc, filename in self._files.items():
-            url = f"{self._base_url}{filename}"
-            filepath = os.path.join(self._data_dir, filename)
-            if not os.path.isfile(filepath):
-                os.makedirs(self._data_dir, exist_ok=True)
-                _download(url, filepath, filedesc)
-
-    def _get_dataloader(self, dset, shuffle=False):
-        return DataLoader(
-            dset,
-            shuffle=shuffle,
-            batch_size=self._batch_size,
-            num_workers=self._n_workers,
-            pin_memory=self._pin_memory,
-            persistent_workers=self._persistent_workers,
-        )
-
-    def train_dataloader(self):
-        """Train dataloader."""
-        return self._get_dataloader(self._dset_train, True)
-
-    def val_dataloader(self):
-        """Validation dataloader."""
-        return self._get_dataloader(self._dset_val)
-
-    def test_dataloader(self):
-        """Test dataloader."""
-        return self._get_dataloader(self._dset_test)
-
-    def predict_dataloader(self):
-        """Predict dataloader."""
-        return self._get_dataloader(self._dset_test)
-
-
-class AtacDataModule(_DataModuleBase):
+class AtacDataModule(PolarbearDataModuleBase):
     """Data Module for single assay ATAC-seq data.
 
     The Data Module downloads the data from the base_url and prepares the train/val/test split.
@@ -194,11 +85,15 @@ class AtacDataModule(_DataModuleBase):
             atac_counts1.data[:], atac_counts2.data[:] = 1, 1
 
             # create a random split of the co-assay data
-            snare_dset = SparseDataset(atac_counts1, torch.zeros(atac_counts1.shape[0], dtype=torch.int64))
+            snare_dset = StackDataset(
+                SparseDataset(atac_counts1), torch.zeros((atac_counts1.shape[0],), dtype=torch.int64)
+            )
             snare_train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
 
             # add the single assay dataset to the training set
-            single_dset = SparseDataset(atac_counts2, torch.ones(atac_counts2.shape[0], dtype=torch.int64))
+            single_dset = StackDataset(
+                SparseDataset(atac_counts2), torch.ones((atac_counts2.shape[0],), dtype=torch.int64)
+            )
             self._dset_train = ConcatDataset([snare_train, single_dset])
 
             self._num_cells = len(snare_dset) + len(single_dset)
@@ -221,7 +116,7 @@ class AtacDataModule(_DataModuleBase):
             self._chr_idx = [(idx, idx + cnt) for idx, cnt in zip(peak_indices, peak_counts, strict=False)]
 
 
-class RnaDataModule(_DataModuleBase):
+class RnaDataModule(PolarbearDataModuleBase):
     """Data Module for single assay RNA-seq data.
 
     The Data Module downloads the data from the base_url and prepares the train/val/test split.
@@ -309,11 +204,15 @@ class RnaDataModule(_DataModuleBase):
             rna_counts2 = mmread(os.path.join(self._data_dir, self._files["single"])).tocsr().astype(np.float32)
 
             # create a random split of the co-assay data
-            snare_dset = SparseDataset(rna_counts1, torch.zeros(rna_counts1.shape[0], dtype=torch.int64))
+            snare_dset = StackDataset(
+                SparseDataset(rna_counts1), torch.zeros((rna_counts1.shape[0],), dtype=torch.int64)
+            )
             snare_train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
 
             # add the single assay dataset to the training set
-            single_dset = SparseDataset(rna_counts2, torch.ones(rna_counts2.shape[0], dtype=torch.int64))
+            single_dset = StackDataset(
+                SparseDataset(rna_counts2), torch.ones((rna_counts2.shape[0],), dtype=torch.int64)
+            )
             self._dset_train = ConcatDataset([snare_train, single_dset])
 
             self._num_cells = len(snare_dset) + len(single_dset)
