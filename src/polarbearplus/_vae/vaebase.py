@@ -1,8 +1,7 @@
 import pyro
 import torch
 from lightning import pytorch as pl
-
-from .scalelatentmessenger import scale_latent
+from scalelatentmessenger import scale_latent
 
 
 class VAEBase(pl.LightningModule):
