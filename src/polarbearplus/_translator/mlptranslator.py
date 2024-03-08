@@ -13,6 +13,10 @@ class MLPTranslatorBase(L.LightningModule, ABC):
         self,
         sourcevae: LightningVAEBase,
         destvae: LightningVAEBase,
+        layer_width: int,
+        n_layers: int,
+        n_latent_vars: int = 1,
+        dropout: float = 0.1,
         lr: float = 1e-3,
     ):
         super().__init__()
@@ -21,6 +25,20 @@ class MLPTranslatorBase(L.LightningModule, ABC):
         self._sourcevae.freeze()
         self._destvae.freeze()
 
+        if n_layers == 0:
+            self._translator = torch.nn.Linear(
+                n_latent_vars * self._sourcevae.n_latent_dim, n_latent_vars * self._destvae.n_latent_dim
+            )
+        elif n_layers > 0:
+            self._translator = MLP(
+                input_dim=n_latent_vars * self._sourcevae.n_latent_dim,
+                output_dim=n_latent_vars * self._destvae.n_latent_dim,
+                hidden_dim=layer_width,
+                n_layers=n_layers,
+                dropout=dropout,
+            )
+        else:
+            raise ValueError("number of layers must be non-negative")
         self._lr = lr
 
         current_frame = inspect.currentframe()
@@ -68,14 +86,7 @@ class MLPTranslatorLatent(MLPTranslatorBase):
         dropout: float = 0.1,
         lr: float = 1e-3,
     ):
-        super().__init__(sourcevae, destvae, lr)
-        self._translator = MLP(
-            input_dim=2 * self._sourcevae.n_latent_dim,
-            output_dim=2 * self._destvae.n_latent_dim,
-            hidden_dim=layer_width,
-            n_layers=n_layers,
-            dropout=dropout,
-        )
+        super().__init__(sourcevae, destvae, layer_width, n_layers, 2, dropout, lr)
 
     def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
         sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
@@ -104,14 +115,7 @@ class MLPTranslatorSample(MLPTranslatorBase):
         dropout: float = 0.1,
         lr: float = 1e-3,
     ):
-        super().__init__(sourcevae, destvae, lr)
-        self._translator = MLP(
-            input_dim=self._sourcevae.n_latent_dim,
-            output_dim=self._destvae.n_latent_dim,
-            hidden_dim=layer_width,
-            n_layers=n_layers,
-            dropout=dropout,
-        )
+        super().__init__(sourcevae, destvae, layer_width, n_layers, 1, dropout, lr)
 
     def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
         sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch

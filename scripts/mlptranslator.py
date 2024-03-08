@@ -24,8 +24,8 @@ class VAELoader:  # noqa D101
         encodercls = RNAVAE if encoder == "rna" else ATACVAE
         decodercls = RNAVAE if decoder == "rna" else ATACVAE
 
-        self.encoder = encodercls.load_from_checkpoint(encoder_checkpoint.relative, map_location="cpu")
-        self.decoder = decodercls.load_from_checkpoint(decoder_checkpoint.relative, map_location="cpu")
+        self.encoder = encodercls.load_from_checkpoint(encoder_checkpoint.absolute, map_location="cpu")
+        self.decoder = decodercls.load_from_checkpoint(decoder_checkpoint.absolute, map_location="cpu")
 
         self._direction = f"{encoder}2{decoder}"
 
