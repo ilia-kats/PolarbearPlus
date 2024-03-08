@@ -90,6 +90,10 @@ class _RNAVAE(VAEBase):
     def n_latent_dim(self):
         return self._n_latent_dim
 
+    @property
+    def latent_name(self):
+        return "z_n"
+
     def get_extra_state(self):
         return {"ngenes": self.ngenes, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
@@ -202,7 +206,7 @@ class _RNAVAE(VAEBase):
                 "l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None] + self.eps)
             )  # (ncells, 1)
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs + self.eps))  # (ncells, nlatent)
+                pyro.sample(self.latent_name, dist.Normal(latent_means, latent_stdevs + self.eps))  # (ncells, nlatent)
 
 
 class RNAVAE(LightningVAEBase):

@@ -7,7 +7,7 @@ from jsonargparse import lazy_instance
 from jsonargparse.typing import Path_fr
 from lightning.pytorch.cli import LightningCLI
 
-from polarbearplus import ATACVAE, RNAVAE, DictLogger, MLPTranslator
+from polarbearplus import ATACVAE, RNAVAE, DictLogger, MLPTranslatorBase
 from polarbearplus.datamodules import SNAREDataModule
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
@@ -37,11 +37,15 @@ class VAELoader:  # noqa D101
 class TranslatorCLI(LightningCLI):  # noqa D101
     def add_arguments_to_parser(self, parser):  # noqa D102
         parser.add_class_arguments(VAELoader, "vae")
-        parser.link_arguments("vae.encoder", "model.sourcevae", apply_on="instantiate")
-        parser.link_arguments("vae.decoder", "model.destvae", apply_on="instantiate")
+        parser.link_arguments("vae.encoder", "model.init_args.sourcevae", apply_on="instantiate")
+        parser.link_arguments("vae.decoder", "model.init_args.destvae", apply_on="instantiate")
         parser.link_arguments("vae.direction", "data.direction", apply_on="instantiate")
 
 
 cli = TranslatorCLI(
-    MLPTranslator, SNAREDataModule, trainer_defaults={"logger": lazy_instance(DictLogger)}, seed_everything_default=42
+    MLPTranslatorBase,
+    SNAREDataModule,
+    subclass_mode_model=True,
+    trainer_defaults={"logger": lazy_instance(DictLogger)},
+    seed_everything_default=42,
 )

@@ -6,6 +6,7 @@ from numbers import Real
 import lightning as L
 import pyro
 import torch
+from numpy.typing import ArrayLike
 from pyro import poutine
 
 from .scalelatentmessenger import scale_latent
@@ -19,9 +20,31 @@ class _VAEMeta(pyro.nn.module._PyroModuleMeta, ABCMeta):
 
 
 class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
+    @property
+    @abstractmethod
+    def latent_name(self):
+        pass
+
     @abstractmethod
     def encode_latent(self, batch, batch_idx):
         pass
+
+    def encode_and_sample_latent(self, batch: ArrayLike, batch_idx: ArrayLike):
+        """Apply the encoder network and return a sample from the variational distribution.
+
+        Args:
+            batch: Data tensor.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A tensor.
+        """
+        trace = poutine.trace(
+            poutine.block(self.guide, expose_fn=lambda msg: msg["name"] == self.latent_name)
+        ).get_trace(batch, batch_idx)
+        if len(trace.nodes) != 3:  # _INPUT, latent_name, _RETURN
+            raise RuntimeError(f"Unexpected number of nodes in guide trace: {len(trace.nodes)}")
+        return trace.nodes[self.latent_name]["value"]
 
     @abstractmethod
     def encode_auxiliary(self, batch, batch_idx):
@@ -112,9 +135,23 @@ class LightningVAEBase(L.LightningModule):
     def encode_auxiliary(self, batch, batch_idx):
         return self._vae.encode_auxiliary(batch, batch_idx)
 
+    def encode_and_sample_latent(self, batch, batch_idx):
+        return self._vae.encode_and_sample_latent(batch, batch_idx)
+
     def decoded_likelihood(self, latent, observed, batch_idx):
         with self.device:
             guide_trace = poutine.trace(self._vae.reconstruction_guide).get_trace(*latent)
+            model_trace = poutine.trace(
+                poutine.block(poutine.replay(self._vae.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
+            ).get_trace(observed, batch_idx)
+            return -model_trace.log_prob_sum()
+
+    def decoded_sample_likelihood(self, latent_sample, observed, batch_idx):
+        with self.device:
+            guide_trace = poutine.trace(self._vae.guide).get_trace(observed, batch_idx)
+            guide_trace.nodes[self._vae.latent_name][
+                "value"
+            ] = latent_sample  # we can't use poutine.condition here because it sets is_observed = True, which won't work with replay
             model_trace = poutine.trace(
                 poutine.block(poutine.replay(self._vae.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
             ).get_trace(observed, batch_idx)
