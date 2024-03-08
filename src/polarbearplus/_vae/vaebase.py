@@ -116,7 +116,7 @@ class LightningVAEBase(L.LightningModule):
         with self.device:
             guide_trace = poutine.trace(self._vae.reconstruction_guide).get_trace(*latent)
             model_trace = poutine.trace(
-                poutine.replay(poutine.block(self._vae.model, expose_fn=lambda msg: msg["is_observed"]), guide_trace)
+                poutine.block(poutine.replay(self._vae.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
             ).get_trace(observed, batch_idx)
             return -model_trace.log_prob_sum()
 
