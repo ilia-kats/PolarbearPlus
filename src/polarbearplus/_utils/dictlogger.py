@@ -1,5 +1,7 @@
+import atexit
 import os
 import pickle
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -19,12 +21,23 @@ class _History(dict):
 
 
 class DictLogger(Logger):
-    def __init__(self, name: str | None = None, version: str | None = None, save_dir: str = "."):
+    def __init__(
+        self,
+        save_dir: str | Path | None = None,
+        filename: str = "log.pkl",
+        name: str | None = None,
+        version: str | None = None,
+    ):
+        super().__init__()
         self._name = name
         self._version = version
         self._savedir = save_dir
+        self._filename = filename
         self.hyperparams = {}
         self.history = _History()
+        self._needFullLog = True
+
+        atexit.register(self._fullog)
 
     @property
     def name(self):
@@ -40,18 +53,32 @@ class DictLogger(Logger):
 
     @rank_zero_only
     def log_hyperparams(self, params: dict[str, Any]):
-        self.hyperparams = params
+        self.hyperparams = dict(params)
 
     @rank_zero_only
     def log_metrics(self, metrics: dict[str, float], step: int):
         for k, v in metrics.items():
             self.history[k].loc[step] = v
 
-    def after_save_checkpoint(self, checkpoint_callback):
-        filename = os.path.basename(os.path.splitext(checkpoint_callback.last_model_path)[0])
-        filename = os.path.join(self._savedir, f"{filename}_{self.name}_{self.version}_log.pkl")
-        with open(filename, "wb") as f:
+    def _save(self):
+        with open(os.path.join(self._savedir, self._filename), "wb") as f:
             pickle.dump(
-                {"history": self.history, "hyperparams": self.hyperparams, "name": self.name, "version": self.version},
+                {
+                    "history": dict(self.history),
+                    "hyperparams": self.hyperparams,
+                    "name": self.name,
+                    "version": self.version,
+                },
                 f,
             )
+
+    def _fullog(self):
+        if self._needFullLog and self._savedir is not None:
+            self._save()
+            self._needFullLog = False
+
+    def __del__(self):
+        self._fullog()
+
+    def after_save_checkpoint(self, checkpoint_callback):
+        self._save()

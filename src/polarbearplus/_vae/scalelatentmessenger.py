@@ -16,7 +16,7 @@ class ScaleLatentMessenger(Messenger):
         super().__init__()
         self._scale = scale
 
-    def _pyro_post_sample(self, msg):
+    def _pyro_sample(self, msg):
         if not msg["is_observed"]:
             msg["scale"] *= self._scale
 

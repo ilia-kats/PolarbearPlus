@@ -2,16 +2,16 @@ import pyro
 import pyro.distributions as dist
 import torch
 from numpy.typing import ArrayLike
-from pyro.nn import PyroModule, PyroParam
+from pyro.nn import PyroParam
 from torch import nn
 from torch.distributions import constraints
 from torch.nn import functional as F
 
-from .mlp import MLP
-from .vaebase import VAEBase
+from .._utils import MLP
+from .vaebase import LightningVAEBase, VAEBase
 
 
-class _RNAVAE(PyroModule):
+class _RNAVAE(VAEBase):
     """Pyro implementation of a VAE for scRNAseq data, based on scVI.
 
     Args:
@@ -41,19 +41,21 @@ class _RNAVAE(PyroModule):
         decoder_n_layers: int | None = None,
         decoder_layer_width: int | None = None,
         decoder_dropout: float | None = None,
+        eps: float = 1e-3,
     ):
         super().__init__()
 
         self.ngenes = ngenes
         self.nbatches = nbatches
-        self.n_latent_dim = n_latent_dim
+        self._n_latent_dim = n_latent_dim
         self.register_buffer("logbatchmeans", torch.as_tensor(logbatchmeans))
         self.register_buffer("logbatchstds", torch.sqrt(torch.as_tensor(logbatchvars)))
 
         self.register_buffer("zero", torch.as_tensor(0.0))
         self.register_buffer("one", torch.as_tensor(1.0))
+        self.register_buffer("eps", torch.as_tensor(eps))
 
-        self.encoder = MLP(ngenes + nbatches, 2 * n_latent_dim, encoder_layer_width, encoder_n_layers, encoder_dropout)
+        self._encoder = MLP(ngenes + nbatches, 2 * n_latent_dim, encoder_layer_width, encoder_n_layers, encoder_dropout)
 
         if decoder_n_layers is None:
             decoder_n_layers = encoder_n_layers
@@ -61,7 +63,7 @@ class _RNAVAE(PyroModule):
             decoder_layer_width = encoder_layer_width
         if decoder_dropout is None:
             decoder_dropout = encoder_dropout
-        self.decoder = MLP(
+        self._decoder = MLP(
             n_latent_dim + nbatches,
             ngenes,
             decoder_layer_width,
@@ -70,16 +72,31 @@ class _RNAVAE(PyroModule):
             last_activation=nn.Softmax(dim=-1),
         )
         self._l_encoder = MLP(ngenes + nbatches, 2, encoder_layer_width, 1, encoder_dropout)
+        torch.nn.init.zeros_(self._l_encoder[-1].weight)
 
-        self.theta = PyroParam(torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.positive)
+        self.theta = PyroParam(
+            torch.randn((self.nbatches, self.ngenes)).exp(), constraint=constraints.interval(0.0, 1 / eps)
+        )
+
+    @property
+    def encoder(self):
+        return self._encoder
+
+    @property
+    def decoder(self):
+        return self._decoder
+
+    @property
+    def n_latent_dim(self):
+        return self._n_latent_dim
 
     def get_extra_state(self):
-        return {"ngenes": self.ngenes, "nbatches": self.nbatches, "n_latent_dim": self.n_latent_dim}
+        return {"ngenes": self.ngenes, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
     def set_extra_state(self, state):
         self.ngenes = state["ngenes"]
         self.nbatches = state["nbatches"]
-        self.n_latent_dim = state["n_latent_dim"]
+        self._n_latent_dim = state["n_latent_dim"]
 
     def model(self, expression_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
         """Generative model.
@@ -101,58 +118,94 @@ class _RNAVAE(PyroModule):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
             z_n = torch.cat((z_n, F.one_hot(batch_idx, self.nbatches).to(z_n.dtype)), -1)
-            rho_n = self.decoder(z_n)  # (ncells, ngenes)
+            rho_n = pyro.deterministic("rho_n", self._decoder(z_n))  # (ncells, ngenes)
 
-            mu = l_n * rho_n
+            mu = pyro.deterministic("mu", l_n * rho_n)
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
             with pyro.plate("genes", size=self.ngenes, dim=-1):
                 pyro.sample(
-                    "data", dist.GammaPoisson(concentration=1 / theta_b, rate=1 / (theta_b * mu)), obs=expression_mat
+                    "data",
+                    dist.GammaPoisson(concentration=1 / (theta_b + self.eps), rate=1 / (theta_b * mu + self.eps)),
+                    obs=expression_mat,
                 )
 
-    def encode(self, expression_mat: ArrayLike, batch_idx: ArrayLike, latentonly: bool = True):
+    def _encode_latent(self, concat: ArrayLike):
+        encoded = self._encoder(concat)
+        latent_means = encoded[:, : self.n_latent_dim]
+        latent_stdevs = encoded[:, self.n_latent_dim :].exp()
+
+        return latent_means, latent_stdevs
+
+    def encode_latent(self, expression_mat: ArrayLike, batch_idx: ArrayLike):
         """Apply the encoder network.
 
         Args:
             expression_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
-            latentonly: If True, encode only the latent variables. If False, also encode the size factors.
 
         Returns:
-            If `latentonly=True`, a two-element tuple with means and standard deviations. Otherwise, a four-element
-            tuple with means and standard deviations of the latent Normal, followed by locations and scales of the
-            LogNormal size factor distribution.
+            A two-element tuple with means and standard deviations, each of size n_cells x 1.
         """
-        concat = torch.cat((expression_mat, F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1)
-        encoded = self.encoder(concat)
-        latent_means = encoded[:, : self.n_latent_dim]
-        latent_stdevs = encoded[:, self.n_latent_dim :].exp()
+        concat = torch.cat(
+            (torch.log1p(expression_mat), F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1
+        )
+        return self._encode_latent(concat)
 
-        if not latentonly:
-            l_encoded = self._l_encoder(concat)
-            sizefactor_means = l_encoded[:, 0]
-            sizefactor_stdevs = l_encoded[:, 1].exp()
-            return latent_means, latent_stdevs, sizefactor_means, sizefactor_stdevs
-        else:
-            return latent_means, latent_stdevs
+    def _encode_auxiliary(self, concat: ArrayLike):
+        l_encoded = self._l_encoder(concat)
+        sizefactor_means = l_encoded[:, 0]
+        sizefactor_stdevs = l_encoded[:, 1].exp()
+        return sizefactor_means, sizefactor_stdevs
 
-    def guide(self, expression_mat, batch_idx):
+    def encode_auxiliary(self, expression_mat: ArrayLike, batch_idx: ArrayLike):
+        """Encode auxiliary variables.
+
+        In this case, auxiliary variables are the means and scales of the cell-specific size factors.
+
+        Args:
+            expression_mat: Cells x genes expression matrix.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A two-element tuple with means and scales, each of size n_cells x 1.
+
+        """
+        concat = torch.cat(
+            (torch.log1p(expression_mat), F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1
+        )
+        return self._encode_auxiliary(concat)
+
+    def guide(self, expression_mat: ArrayLike, batch_idx: ArrayLike):
         """Variational posterior.
 
         Args:
             expression_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        latent_means, latent_stdevs, sizefactor_means, sizefactor_stdevs = self.encode(
-            expression_mat, batch_idx, latentonly=False
+        self.reconstruction_guide(
+            *self.encode_latent(expression_mat, batch_idx), *self.encode_auxiliary(expression_mat, batch_idx)
         )
-        with pyro.plate("cells", size=expression_mat.shape[0], dim=-2):
-            pyro.sample("l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None]))  # (ncells, 1)
+
+    def reconstruction_guide(self, latent_means, latent_stdevs, sizefactor_means, sizefactor_stdevs):
+        """Variational posterior given the encoded data.
+
+        This can be used for translating from another modality.
+
+        Args:
+            latent_means: Cells x latent_vars latent mean matrix.
+            latent_stdevs: Cells x latent_vars latent standard deviation matrix.
+            sizefactor_means: Cells x 1 latent sizefactor mean matrix.
+            sizefactor_stdevs: Cells x 1 latent sizefactor scale matrix.
+        """
+        with pyro.plate("cells", size=latent_means.shape[0], dim=-2):
+            pyro.sample(
+                "l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None] + self.eps)
+            )  # (ncells, 1)
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))  # (ncells, nlatent)
+                pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs + self.eps))  # (ncells, nlatent)
 
 
-class RNAVAE(VAEBase):
+class RNAVAE(LightningVAEBase):
     """A beta-VAE for scRNAseq data.
 
     Args:
@@ -168,7 +221,11 @@ class RNAVAE(VAEBase):
         decoder_layer_width: Width of the hidden layers in the decoder.
         decoder_dropout: Dropout probability in the decoder.
         lr: Learning rate.
-        beta: The scaling factor for the KL divergence.
+        beta: The scaling factor for the KL divergence. If a `float`, the scaling will stay constant.
+            If a `tuple[float, float, int, int]`, the first entry is the starting value, the second
+            entry the final value, the third entry the epoch at which the penalty starts to increase,
+            and the fourth entry the number of epochs until the final value is reached.
+        eps: Small value for numerical stability.
     """
 
     def __init__(
@@ -185,7 +242,8 @@ class RNAVAE(VAEBase):
         decoder_layer_width: int | None = None,
         decoder_dropout: float | None = None,
         lr: float = 1e-3,
-        beta: float = 1,
+        beta: float | tuple[float, float, int, int] = 1,
+        eps: float = 1e-3,
     ):
         super().__init__(
             _RNAVAE,
@@ -202,4 +260,5 @@ class RNAVAE(VAEBase):
             decoder_n_layers=decoder_n_layers,
             decoder_layer_width=decoder_layer_width,
             decoder_dropout=decoder_dropout,
+            eps=eps,
         )

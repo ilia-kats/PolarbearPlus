@@ -22,7 +22,7 @@ urls.Home-page = "https://github.com/ilia-kats/PolarbearPlus"
 dependencies = [
     "torch>=2.1",
     "pyro-ppl>=1.8.5",
-    "lightning>=2.0",
+    "lightning>=2.2",
     "numpy>=1.20",
     "pandas",
     # for debug logging (referenced from the issue template)
@@ -131,6 +131,8 @@ ignore = [
     "D213",
     # having a proper branching structure makes the code more readable IMO
     "RET505", "RET506", "RET507", "RET508",
+    # relative imports rule
+    "TID252",
 ]
 
 [tool.ruff.lint.pydocstyle]

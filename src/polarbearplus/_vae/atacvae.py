@@ -7,8 +7,8 @@ from torch import nn
 from torch.distributions import constraints
 from torch.nn import functional as F
 
-from .mlp import MLP
-from .vaebase import VAEBase
+from .._utils import MLP
+from .vaebase import LightningVAEBase
 
 
 class _Encoder(nn.Module):
@@ -33,6 +33,8 @@ class _Encoder(nn.Module):
         n_layers: int,
         dropout: float = 0.1,
         hidden_width_factor: float = 1.0,
+        noutputs: int = 1,
+        last_activation: type[nn.Module] | nn.Module | None = None,
     ):
         super().__init__()
 
@@ -52,7 +54,15 @@ class _Encoder(nn.Module):
                 )
             )
 
-        self._output = nn.Sequential(nn.Linear(len(chr_idx) * output_dim, 2 * output_dim))
+        output = nn.Linear(len(chr_idx) * output_dim, noutputs * output_dim)
+        nn.init.kaiming_normal_(output.weight)
+        nn.init.zeros_(output.bias)
+        self._output = nn.Sequential(output)
+        if last_activation is not None:
+            if isinstance(last_activation, nn.Module):
+                self._output.append(last_activation)
+            else:
+                self._output.append(last_activation())
 
     def forward(self, x, conditions):
         return self._output(
@@ -152,7 +162,7 @@ class _ATACVAE(PyroModule):
 
         if n_latent_dim is None:
             n_latent_dim = int(self.nregions**0.25)
-        self.n_latent_dim = n_latent_dim
+        self._n_latent_dim = n_latent_dim
         self.register_buffer("zero", torch.as_tensor(0.0))
         self.register_buffer("one", torch.as_tensor(1.0))
 
@@ -160,32 +170,85 @@ class _ATACVAE(PyroModule):
             decoder_n_layers = encoder_n_layers
         if decoder_dropout is None:
             decoder_dropout = encoder_dropout
-        self.encoder = _Encoder(nbatches, chr_idx, n_latent_dim, encoder_n_layers, encoder_dropout, hidden_width_factor)
-        self.decoder = _Decoder(nbatches, chr_idx, n_latent_dim, decoder_n_layers, decoder_dropout, hidden_width_factor)
-        self._l_encoder = MLP(
-            self.nregions + nbatches,
-            1,
-            int((self.nregions * n_latent_dim) ** 0.5 * hidden_width_factor),
-            encoder_n_layers,
-            encoder_dropout,
+        self._encoder = _Encoder(
+            nconditions=nbatches,
+            chr_idx=chr_idx,
+            output_dim=n_latent_dim,
+            n_layers=encoder_n_layers,
+            dropout=encoder_dropout,
+            hidden_width_factor=hidden_width_factor,
+            noutputs=2,
+        )
+        self._decoder = _Decoder(
+            nconditions=nbatches,
+            chr_idx=chr_idx,
+            input_dim=n_latent_dim,
+            n_layers=decoder_n_layers,
+            dropout=decoder_dropout,
+            hidden_width_factor=hidden_width_factor,
+        )
+        self._l_encoder = _Encoder(
+            nconditions=nbatches,
+            chr_idx=chr_idx,
+            output_dim=1,
+            n_layers=encoder_n_layers,
+            dropout=encoder_dropout,
+            hidden_width_factor=hidden_width_factor,
             last_activation=nn.Sigmoid,
         )
+        # torch.nn.init.zeros_(self._l_encoder[-2].weight)
 
         self.r = PyroParam(torch.randn((self.nregions,)).sigmoid(), constraint=constraints.interval(0, 1))
 
+    @property
+    def encoder(self):
+        return self._encoder
+
+    @property
+    def decoder(self):
+        return self._decoder
+
+    @property
+    def n_latent_dim(self):
+        return self._n_latent_dim
+
     def get_extra_state(self):
-        return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self.n_latent_dim}
+        return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
     def set_extra_state(self, state):
         self.nregions = state["nregions"]
         self.nbatches = state["nbatches"]
-        self.n_latent_dim = state["n_latent_dim"]
+        self._n_latent_dim = state["n_latent_dim"]
 
-    def encode(self, region_mat: ArrayLike, batch_idx: ArrayLike):
-        latents = self.encoder(region_mat, batch_idx)
+    def encode_latent(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+        """Apply the encoder network.
+
+        Args:
+            region_mat: Cells x genes expression matrix.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A two-element tuple with means and standard deviations, each of size n_cells x 1.
+        """
+        latents = self._encoder(region_mat, batch_idx)
         latent_means = latents[:, : self.n_latent_dim]
         latent_stdevs = latents[:, self.n_latent_dim :].exp()
+
         return latent_means, latent_stdevs
+
+    def encode_auxiliary(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+        """Encode auxiliary variables.
+
+        In this case, auxiliary variables are the cell-specific factors.
+
+        Args:
+            region_mat: Cells x genes expression matrix.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A 1-element tuple with an n_cells x 1 matrix.
+        """
+        return (self._l_encoder(region_mat, batch_idx),)  # (ncells, 1)
 
     def model(self, region_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
         """Generative model.
@@ -199,34 +262,50 @@ class _ATACVAE(PyroModule):
             raise ValueError("Need either region_mat or ncells, but both are None.")
         if ncells is None:
             ncells = region_mat.shape[0]
-        if region_mat is not None:
-            concat = torch.cat((region_mat, F.one_hot(batch_idx, self.nbatches).to(region_mat.dtype)), -1)
-            l_n = self._l_encoder(concat)  # (ncells, 1)
-        else:
-            l_n = torch.ones((ncells, 1))  # (ncells, 1)
+
         with pyro.plate("cells", size=ncells, dim=-2):
+            # this will be replaced by the encoded l_n from the guide during inference
+            # can't use pyro.deterministic because that sets is_observed=True, so won't
+            # be replaced by guide value. We want l_n in the trace for analysis
+            l_n = pyro.sample("l_n", dist.Delta(self.one).mask(region_mat is None))  # (ncells, 1)
+
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
-            y_n = self.decoder(z_n, batch_idx)  # (ncells, nregions)
+            y_n = self._decoder(z_n, batch_idx)  # (ncells, nregions)
 
+            probs = pyro.deterministic("mu", y_n * l_n * self.r)
             with pyro.plate("regions", size=self.nregions, dim=-1):
-                pyro.sample("data", dist.Bernoulli(probs=y_n * l_n * self.r), obs=region_mat)
+                pyro.sample("data", dist.Bernoulli(probs=probs), obs=region_mat)
 
-    def guide(self, region_mat: ArrayLike | None, batch_idx: ArrayLike):
+    def guide(self, region_mat: ArrayLike, batch_idx: ArrayLike):
         """Variational posterior.
 
         Args:
             region_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        latent_means, latent_stdevs = self.encode(region_mat, batch_idx)
-        with pyro.plate("cells", size=region_mat.shape[0], dim=-2):  # noqa SIM117
+        self.reconstruction_guide(
+            *self.encode_latent(region_mat, batch_idx), *self.encode_auxiliary(region_mat, batch_idx)
+        )
+
+    def reconstruction_guide(self, latent_means: ArrayLike, latent_stdevs: ArrayLike, l_n: ArrayLike):
+        """Variational posterior given the encoded data.
+
+        This can be used for translating from another modality.
+
+        Args:
+            latent_means: Cells x latent_vars latent mean matrix.
+            latent_stdevs: Cells x latent_vars latent standard deviation matrix.
+            l_n: Cells x 1 matrix of cell-specific factors.
+        """
+        with pyro.plate("cells", size=latent_means.shape[0], dim=-2):
+            pyro.sample("l_n", dist.Delta(l_n))
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))
 
 
-class ATACVAE(VAEBase):
+class ATACVAE(LightningVAEBase):
     """A beta-VAE for scATACseq data.
 
     Args:
@@ -239,7 +318,10 @@ class ATACVAE(VAEBase):
         decoder_n_layers: Number of hidden layers in the decoder.
         decoder_dropout: Dropout probability in the decoder.
         lr: Learning rate.
-        beta: The scaling factor for the KL divergence.
+        beta: The scaling factor for the KL divergence. If a `float`, the scaling will stay constant.
+            If a `tuple[float, float, int, int]`, the first entry is the starting value, the second
+            entry the final value, the third entry the epoch at which the penalty starts to increase,
+            and the fourth entry the number of epochs until the final value is reached.
     """
 
     def __init__(
@@ -253,7 +335,7 @@ class ATACVAE(VAEBase):
         decoder_n_layers: int | None = None,
         decoder_dropout: float | None = None,
         lr: float = 1e-3,
-        beta: float = 1,
+        beta: float | tuple[float, float, int, int] = 1,
     ):
         super().__init__(
             _ATACVAE,
