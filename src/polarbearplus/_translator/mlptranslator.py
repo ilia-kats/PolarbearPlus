@@ -63,8 +63,15 @@ class MLPTranslatorBase(L.LightningModule, ABC):
         return torch.optim.Adam(self._translator.parameters(), lr=self._lr)
 
     @abstractmethod
-    def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
+    def _step_impl(self, sourcebatch, sourcebatch_idx, destbatch, destbatch_idx):
         pass
+
+    def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
+        sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+        decodedlikelihood = self._step_impl(sourcebatch, sourcebatch_idx, destbatch, destbatch_idx) / destbatch.numel()
+
+        self.log(log_name, decodedlikelihood, on_step=True, on_epoch=True)
+        return decodedlikelihood
 
     def training_step(self, batch, batch_idx, dataloader_idx=0):
         return self._step(batch, batch_idx, dataloader_idx, "-training_likelihood")
@@ -88,8 +95,7 @@ class MLPTranslatorLatent(MLPTranslatorBase):
     ):
         super().__init__(sourcevae, destvae, layer_width, n_layers, 2, dropout, lr)
 
-    def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
-        sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+    def _step_impl(self, sourcebatch, sourcebatch_idx, destbatch, destbatch_idx):
         sourcelatent = self._sourcevae.encode_latent(sourcebatch, sourcebatch_idx)
         destauxiliary = self._destvae.encode_auxiliary(destbatch, destbatch_idx)
 
@@ -98,11 +104,9 @@ class MLPTranslatorLatent(MLPTranslatorBase):
         )
         translatedstdev = translatedstdev.exp()
 
-        decodedlikelihood = self._destvae.decoded_likelihood(
+        return self._destvae.decoded_likelihood(
             (translatedmean, translatedstdev, *destauxiliary), destbatch, destbatch_idx
         )
-        self.log(log_name, decodedlikelihood, on_step=True, on_epoch=True)
-        return decodedlikelihood
 
 
 class MLPTranslatorSample(MLPTranslatorBase):
@@ -117,12 +121,7 @@ class MLPTranslatorSample(MLPTranslatorBase):
     ):
         super().__init__(sourcevae, destvae, layer_width, n_layers, 1, dropout, lr)
 
-    def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
-        sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+    def _step_impl(self, sourcebatch, sourcebatch_idx, destbatch, destbatch_idx):
         sourcelatent = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
-
         translatedlatent = self._translator(sourcelatent)
-
-        decodedlikelihood = self._destvae.decoded_sample_likelihood(translatedlatent, destbatch, destbatch_idx)
-        self.log(log_name, decodedlikelihood, on_step=True, on_epoch=True)
-        return decodedlikelihood
+        return self._destvae.decoded_sample_likelihood(translatedlatent, destbatch, destbatch_idx)
