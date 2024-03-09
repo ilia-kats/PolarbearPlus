@@ -1,13 +1,13 @@
 import pyro
 import pyro.distributions as dist
 import torch
-from pyro.nn import PyroModule, PyroParam
+from pyro.nn import PyroParam
 from torch import nn
 from torch.distributions import constraints
 from torch.nn import functional as F
 
 from .._utils import MLP
-from .vaebase import LightningVAEBase
+from .vaebase import LightningVAEBase, VAEBase
 
 
 class _Encoder(nn.Module):
@@ -129,7 +129,7 @@ class _Decoder(nn.Module):
         return torch.sigmoid(torch.cat([dec(concat) for dec in self._decoders], -1))
 
 
-class _ATACVAE(PyroModule):
+class _ATACVAE(VAEBase):
     """Pyro implementation of a VAE for scATACseq data, based on PeakVI.
 
     Args:
