@@ -9,12 +9,29 @@ from .._vae import LightningVAEBase
 
 
 class MLPTranslatorBase(L.LightningModule, ABC):
+    """Base class for the MLP translator network.
+
+    This uses a standard dense neural network to translate between data modalities.
+
+    Args:
+        sourcevae: The encoder VAE.
+        destvae: The decoder VAE.
+        n_layers: Number of hidden layers. If 0, only one linear layer without
+            any activation will be used.
+        layer_width: Width of the hidden layers.
+        n_latent_vars: Number of latent variables in each latent dimension. For example,
+            if the latent distribution is a Gaussian, it has two latent variables per
+            dimension: mean and standard deviation.
+        dropout: Dropout probability in the translator. Used only if `n_layers > 0`.
+        lr: Learning rate.
+    """
+
     def __init__(
         self,
         sourcevae: LightningVAEBase,
         destvae: LightningVAEBase,
-        layer_width: int,
         n_layers: int,
+        layer_width: int,
         n_latent_vars: int = 1,
         dropout: float = 0.1,
         lr: float = 1e-3,
@@ -63,7 +80,25 @@ class MLPTranslatorBase(L.LightningModule, ABC):
         return torch.optim.Adam(self._translator.parameters(), lr=self._lr)
 
     @abstractmethod
-    def _step_impl(self, sourcebatch, sourcebatch_idx, destbatch, destbatch_idx):
+    def _step_impl(
+        self,
+        sourcebatch: torch.Tensor,
+        sourcebatch_idx: torch.Tensor,
+        destbatch: torch.Tensor,
+        destbatch_idx: torch.Tensor,
+    ) -> float:
+        """Calculate loss for translation between modalities.
+
+        Args:
+            sourcebatch: Source data matrix.
+            sourcebatch_idx: Index of the experimental batch for each cell in the source modality.
+            destbatch: Target data matrix.
+            destbatch_idx: Index of the experimental batch for each cell in the target modality.
+
+        Returns:
+            The negative log-likelihood of `destbatch` if the target decoder is applied using latent
+                variables translated from the encoding of the source modality.
+        """
         pass
 
     def _step(self, batch, batch_idx, dataloader_idx=0, log_name="-likelihood"):
@@ -84,6 +119,18 @@ class MLPTranslatorBase(L.LightningModule, ABC):
 
 
 class MLPTranslatorLatent(MLPTranslatorBase):
+    """Translator network that translates between parameters of the variational distributions.
+
+    Args:
+        sourcevae: The encoder VAE.
+        destvae: The decoder VAE.
+        n_layers: Number of hidden layers. If 0, only one linear layer without
+            any activation will be used.
+        layer_width: Width of the hidden layers.
+        dropout: Dropout probability in the translator. Used only if `n_layers > 0`.
+        lr: Learning rate.
+    """
+
     def __init__(
         self,
         sourcevae: LightningVAEBase,
@@ -93,9 +140,15 @@ class MLPTranslatorLatent(MLPTranslatorBase):
         dropout: float = 0.1,
         lr: float = 1e-3,
     ):
-        super().__init__(sourcevae, destvae, layer_width, n_layers, 2, dropout, lr)
+        super().__init__(sourcevae, destvae, n_layers, layer_width, 2, dropout, lr)
 
-    def _step_impl(self, sourcebatch, sourcebatch_idx, destbatch, destbatch_idx):
+    def _step_impl(
+        self,
+        sourcebatch: torch.Tensor,
+        sourcebatch_idx: torch.Tensor,
+        destbatch: torch.Tensor,
+        destbatch_idx: torch.Tensor,
+    ) -> float:
         sourcelatent = self._sourcevae.encode_latent(sourcebatch, sourcebatch_idx)
         destauxiliary = self._destvae.encode_auxiliary(destbatch, destbatch_idx)
 
@@ -110,6 +163,18 @@ class MLPTranslatorLatent(MLPTranslatorBase):
 
 
 class MLPTranslatorSample(MLPTranslatorBase):
+    """Translator network that translates between samples from the latent distribution.
+
+    Args:
+        sourcevae: The encoder VAE.
+        destvae: The decoder VAE.
+        n_layers: Number of hidden layers. If 0, only one linear layer without
+            any activation will be used.
+        layer_width: Width of the hidden layers.
+        dropout: Dropout probability in the translator. Used only if `n_layers > 0`.
+        lr: Learning rate.
+    """
+
     def __init__(
         self,
         sourcevae: LightningVAEBase,
@@ -119,9 +184,15 @@ class MLPTranslatorSample(MLPTranslatorBase):
         dropout: float = 0.1,
         lr: float = 1e-3,
     ):
-        super().__init__(sourcevae, destvae, layer_width, n_layers, 1, dropout, lr)
+        super().__init__(sourcevae, destvae, n_layers, layer_width, 1, dropout, lr)
 
-    def _step_impl(self, sourcebatch, sourcebatch_idx, destbatch, destbatch_idx):
+    def _step_impl(
+        self,
+        sourcebatch: torch.Tensor,
+        sourcebatch_idx: torch.Tensor,
+        destbatch: torch.Tensor,
+        destbatch_idx: torch.Tensor,
+    ) -> float:
         sourcelatent = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
         translatedlatent = self._translator(sourcelatent)
         return self._destvae.decoded_sample_likelihood(translatedlatent, destbatch, destbatch_idx)

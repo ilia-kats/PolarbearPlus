@@ -1,7 +1,6 @@
 import pyro
 import pyro.distributions as dist
 import torch
-from numpy.typing import ArrayLike
 from pyro.nn import PyroModule, PyroParam
 from torch import nn
 from torch.distributions import constraints
@@ -224,7 +223,7 @@ class _ATACVAE(PyroModule):
         self.nbatches = state["nbatches"]
         self._n_latent_dim = state["n_latent_dim"]
 
-    def encode_latent(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+    def encode_latent(self, region_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Apply the encoder network.
 
         Args:
@@ -240,7 +239,7 @@ class _ATACVAE(PyroModule):
 
         return latent_means, latent_stdevs
 
-    def encode_auxiliary(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+    def encode_auxiliary(self, region_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Encode auxiliary variables.
 
         In this case, auxiliary variables are the cell-specific factors.
@@ -254,7 +253,7 @@ class _ATACVAE(PyroModule):
         """
         return (self._l_encoder(region_mat, batch_idx),)  # (ncells, 1)
 
-    def model(self, region_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
+    def model(self, region_mat: torch.Tensor | None, batch_idx: torch.Tensor, ncells: int | None = None):
         """Generative model.
 
         Args:
@@ -282,7 +281,7 @@ class _ATACVAE(PyroModule):
             with pyro.plate("regions", size=self.nregions, dim=-1):
                 pyro.sample("data", dist.Bernoulli(probs=probs), obs=region_mat)
 
-    def guide(self, region_mat: ArrayLike, batch_idx: ArrayLike):
+    def guide(self, region_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Variational posterior.
 
         Args:
@@ -293,7 +292,7 @@ class _ATACVAE(PyroModule):
             *self.encode_latent(region_mat, batch_idx), *self.encode_auxiliary(region_mat, batch_idx)
         )
 
-    def reconstruction_guide(self, latent_means: ArrayLike, latent_stdevs: ArrayLike, l_n: ArrayLike):
+    def reconstruction_guide(self, latent_means: torch.Tensor, latent_stdevs: torch.Tensor, l_n: torch.Tensor):
         """Variational posterior given the encoded data.
 
         This can be used for translating from another modality.
