@@ -212,6 +212,10 @@ class _ATACVAE(PyroModule):
     def n_latent_dim(self):
         return self._n_latent_dim
 
+    @property
+    def latent_name(self):
+        return "z_n"
+
     def get_extra_state(self):
         return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
