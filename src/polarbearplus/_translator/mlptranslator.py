@@ -114,7 +114,7 @@ class MLPTranslatorLatent(MLPTranslatorBase):
 
 
 class MLPTranslatorSample(MLPTranslatorBase):
-    """Translator network that translates between samples from the latent distribution.
+    """Translator network that translates between samples from the variational distribution.
 
     Args:
         sourcevae: The encoder VAE.
