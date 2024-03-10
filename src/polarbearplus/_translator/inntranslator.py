@@ -19,9 +19,21 @@ class CouplingNSFWithRotation(Flow):
         context: Number of context features.
         transforms: Number of coupling blocks.
         n_bins: Number of spline bins.
+        block_n_layers: Number of hidden layers in each coupling block.
+        block_layer_width: Width of the hidden layers in a coupling block.
+        block_residual: Whether to use residual layers in the coupling blocks.
     """
 
-    def __init__(self, features: int, context: int = 0, transforms: int = 3, n_bins: int = 8):
+    def __init__(
+        self,
+        features: int,
+        context: int = 0,
+        transforms: int = 3,
+        n_bins: int = 8,
+        block_n_layers: int = 2,
+        block_layer_width: int = 64,
+        block_residual: bool = False,
+    ):
         shapes = [(n_bins,), (n_bins,), (n_bins - 1,)]
         transform = [
             MaskedAutoregressiveTransform(
@@ -39,7 +51,14 @@ class CouplingNSFWithRotation(Flow):
                 transform.append(Unconditional(RotationTransform, torch.randn((features, features)), buffer=True))
                 transform.append(
                     MaskedAutoregressiveTransform(
-                        features=features, context=context, passes=2, univariate=MonotonicRQSTransform, shapes=shapes
+                        features=features,
+                        context=context,
+                        passes=2,
+                        univariate=MonotonicRQSTransform,
+                        shapes=shapes,
+                        hidden_features=[block_layer_width] * block_n_layers,
+                        activation=torch.nn.GELU,
+                        residual=block_residual,
                     )
                 )
 
@@ -58,6 +77,9 @@ class INNTranslatorBase(TranslatorBase):
         destvae: The decoder VAE.
         n_layers: Number of coupling blocks in the invertible neural network.
         n_bins: Number of spline bins.
+        block_n_layers: Number of hidden layers in each coupling block.
+        block_layer_width: Width of the hidden layers in a coupling block.
+        block_residual: Whether to use residual layers in the coupling blocks.
         n_latent_vars: Number of latent variables in each latent dimension. For example,
             if the latent distribution is a Gaussian, it has two latent variables per
             dimension: mean and standard deviation.
@@ -70,6 +92,9 @@ class INNTranslatorBase(TranslatorBase):
         destvae: LightningVAEBase,
         n_layers: int,
         n_bins: int,
+        block_n_layers: int = 2,
+        block_layer_width: int = 64,
+        block_residual: bool = False,
         n_latent_vars: int = 1,
         lr: float = 1e-3,
     ):
@@ -158,11 +183,22 @@ class INNTranslatorLatent(INNTranslatorBase):
         destvae: The decoder VAE.
         n_layers: Number of coupling blocks in the invertible neural network.
         n_bins: Number of spline bins.
+        block_n_layers: Number of hidden layers in each coupling block.
+        block_layer_width: Width of the hidden layers in a coupling block.
+        block_residual: Whether to use residual layers in the coupling blocks.
         lr: Learning rate.
     """
 
     def __init__(
-        self, sourcevae: LightningVAEBase, destvae: LightningVAEBase, n_layers: int, n_bins: int, lr: float = 1e-3
+        self,
+        sourcevae: LightningVAEBase,
+        destvae: LightningVAEBase,
+        n_layers: int,
+        n_bins: int,
+        block_n_layers: int = 2,
+        block_layer_width: int = 64,
+        block_residual: bool = False,
+        lr: float = 1e-3,
     ):
         super().__init__(sourcevae, destvae, n_layers, n_bins, 2, lr)
 
@@ -189,11 +225,22 @@ class INNTranslatorSample(INNTranslatorBase):
         destvae: The decoder VAE.
         n_layers: Number of coupling blocks in the invertible neural network.
         n_bins: Number of spline bins.
+        block_n_layers: Number of hidden layers in each coupling block.
+        block_layer_width: Width of the hidden layers in a coupling block.
+        block_residual: Whether to use residual layers in the coupling blocks.
         lr: Learning rate.
     """
 
     def __init__(
-        self, sourcevae: LightningVAEBase, destvae: LightningVAEBase, n_layers: int, n_bins: int, lr: float = 1e-3
+        self,
+        sourcevae: LightningVAEBase,
+        destvae: LightningVAEBase,
+        n_layers: int,
+        n_bins: int,
+        block_n_layers: int = 2,
+        block_layer_width: int = 64,
+        block_residual: bool = False,
+        lr: float = 1e-3,
     ):
         super().__init__(sourcevae, destvae, n_layers, n_bins, 1, lr)
 
