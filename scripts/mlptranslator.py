@@ -4,7 +4,7 @@ import logging
 from typing import Literal
 
 from jsonargparse import lazy_instance
-from jsonargparse.typing import Path_fr
+from jsonargparse.typing import Path_dc, Path_fr
 from lightning.pytorch.cli import LightningCLI
 
 from polarbearplus import ATACVAE, RNAVAE, DictLogger, MLPTranslatorBase
@@ -37,6 +37,8 @@ class VAELoader:  # noqa D101
 class TranslatorCLI(LightningCLI):  # noqa D101
     def add_arguments_to_parser(self, parser):  # noqa D102
         parser.add_class_arguments(VAELoader, "vae")
+        parser.add_argument("--save_dir", type=Path_dc, help="Directory to save logs and checkpoints to.")
+        parser.link_arguments("save_dir", "trainer.logger.init_args.save_dir")
         parser.link_arguments("vae.encoder", "model.init_args.sourcevae", apply_on="instantiate")
         parser.link_arguments("vae.decoder", "model.init_args.destvae", apply_on="instantiate")
         parser.link_arguments("vae.direction", "data.direction", apply_on="instantiate")

@@ -102,7 +102,7 @@ class _RNAVAE(VAEBase):
         self.nbatches = state["nbatches"]
         self._n_latent_dim = state["n_latent_dim"]
 
-    def model(self, expression_mat: ArrayLike | None, batch_idx: ArrayLike, ncells: int | None = None):
+    def model(self, expression_mat: torch.Tensor | None, batch_idx: torch.Tensor, ncells: int | None = None):
         """Generative model.
 
         Args:
@@ -133,14 +133,14 @@ class _RNAVAE(VAEBase):
                     obs=expression_mat,
                 )
 
-    def _encode_latent(self, concat: ArrayLike):
+    def _encode_latent(self, concat: torch.Tensor):
         encoded = self._encoder(concat)
         latent_means = encoded[:, : self.n_latent_dim]
         latent_stdevs = encoded[:, self.n_latent_dim :].exp()
 
         return latent_means, latent_stdevs
 
-    def encode_latent(self, expression_mat: ArrayLike, batch_idx: ArrayLike):
+    def encode_latent(self, expression_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Apply the encoder network.
 
         Args:
@@ -161,7 +161,7 @@ class _RNAVAE(VAEBase):
         sizefactor_stdevs = l_encoded[:, 1].exp()
         return sizefactor_means, sizefactor_stdevs
 
-    def encode_auxiliary(self, expression_mat: ArrayLike, batch_idx: ArrayLike):
+    def encode_auxiliary(self, expression_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Encode auxiliary variables.
 
         In this case, auxiliary variables are the means and scales of the cell-specific size factors.
@@ -179,7 +179,7 @@ class _RNAVAE(VAEBase):
         )
         return self._encode_auxiliary(concat)
 
-    def guide(self, expression_mat: ArrayLike, batch_idx: ArrayLike):
+    def guide(self, expression_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Variational posterior.
 
         Args:
@@ -190,7 +190,13 @@ class _RNAVAE(VAEBase):
             *self.encode_latent(expression_mat, batch_idx), *self.encode_auxiliary(expression_mat, batch_idx)
         )
 
-    def reconstruction_guide(self, latent_means, latent_stdevs, sizefactor_means, sizefactor_stdevs):
+    def reconstruction_guide(
+        self,
+        latent_means: torch.Tensor,
+        latent_stdevs: torch.Tensor,
+        sizefactor_means: torch.Tensor,
+        sizefactor_stdevs: torch.Tensor,
+    ):
         """Variational posterior given the encoded data.
 
         This can be used for translating from another modality.
