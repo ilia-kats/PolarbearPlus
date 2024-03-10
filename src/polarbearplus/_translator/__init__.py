@@ -1,1 +1,3 @@
-from .mlptranslator import MLPTranslatorBase, MLPTranslatorLatent, MLPTranslatorSample
+from .base import TranslatorBase
+from .inntranslator import INNTranslatorLatent
+from .mlptranslator import MLPTranslatorLatent, MLPTranslatorSample

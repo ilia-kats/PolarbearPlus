@@ -7,7 +7,7 @@ from jsonargparse import lazy_instance
 from jsonargparse.typing import Path_dc, Path_fr
 from lightning.pytorch.cli import LightningCLI
 
-from polarbearplus import ATACVAE, RNAVAE, DictLogger, MLPTranslatorBase
+from polarbearplus import ATACVAE, RNAVAE, DictLogger, TranslatorBase
 from polarbearplus.datamodules import SNAREDataModule
 
 logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.INFO)
@@ -45,7 +45,7 @@ class TranslatorCLI(LightningCLI):  # noqa D101
 
 
 cli = TranslatorCLI(
-    MLPTranslatorBase,
+    TranslatorBase,
     SNAREDataModule,
     subclass_mode_model=True,
     trainer_defaults={"logger": lazy_instance(DictLogger)},
