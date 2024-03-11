@@ -35,7 +35,7 @@ class DictLogger(Logger):
         self._filename = filename
         self.hyperparams = {}
         self.history = _History()
-        self._needFullLog = True
+        self._needFullLog = False
 
         atexit.register(self._fullog)
 
@@ -57,6 +57,7 @@ class DictLogger(Logger):
 
     @rank_zero_only
     def log_metrics(self, metrics: dict[str, float], step: int):
+        self._needFullLog = True
         for k, v in metrics.items():
             self.history[k].loc[step] = v
 
