@@ -47,7 +47,7 @@ class CouplingNSFWithRotation(Flow):
             )
         ]
         if transforms > 1:
-            for _ in range(transforms):
+            for _ in range(transforms - 1):
                 transform.append(Unconditional(RotationTransform, torch.randn((features, features)), buffer=True))
                 transform.append(
                     MaskedAutoregressiveTransform(
@@ -108,8 +108,9 @@ class INNTranslatorBase(TranslatorBase):
             transforms=n_layers,
             n_bins=n_bins,
         )
-        self._latentstats = CountMeanVarianceStats()
+        self._latentstats = None
         self._needLatentStats = True
+        self._n_latentstats = 0
 
         current_frame = inspect.currentframe()
         self.save_hyperparameters(ignore=["sourcevae", "destvae"], frame=current_frame.f_back)
@@ -126,51 +127,67 @@ class INNTranslatorBase(TranslatorBase):
         destbatch: torch.Tensor,
         destbatch_idx: torch.Tensor,
     ):
-        sourcelatent = torch.cat(
-            self._sourcevae.encode_latent(sourcebatch, sourcebatch_idx)[: self._n_latent_vars], dim=-1
-        )
-        destlatent = torch.cat(self._destvae.encode_latent(destbatch, destbatch_idx)[: self._n_latent_vars], dim=-1)
+        sourcelatent = self._sourcevae.encode_latent(sourcebatch, sourcebatch_idx)
+        destlatent = self._destvae.encode_latent(destbatch, destbatch_idx)
 
         if self._needLatentStats:
             if self.training:
-                for sample in destlatent:
-                    self._latentstats.update(sample)
-            stats = self._latentstats.get()
-            latentmean = stats["mean"]
-            latentstd = torch.sqrt(stats["variance"])
+                if self._latentstats is None:
+                    self._n_latentstats = len(destlatent)
+                    self._latentstats = tuple(CountMeanVarianceStats() for _ in range(self._n_latentstats))
+                for i, samples in enumerate(destlatent):
+                    for sample in samples:
+                        self._latentstats[i].update(sample)
+            stats = tuple(latentstats.get() for latentstats in self._latentstats)
+            latentmean = tuple(s["mean"] for s in stats)
+            latentvar = tuple(s["variance"] for s in stats)
         else:
             latentmean = self._latentmean
-            latentstd = self._latentstd
+            latentvar = self._latentvar
 
-        destlatent = (destlatent - latentmean) / latentstd
-        return sourcelatent, destlatent, latentmean, latentstd
+        return sourcelatent, destlatent, latentmean, latentvar
+
+    @property
+    def _latentmean(self):
+        return tuple(getattr(self, f"_latentmean_{i}") for i in range(self._n_latentstats))
+
+    @property
+    def _latentvar(self):
+        return tuple(getattr(self, f"_latentvar_{i}") for i in range(self._n_latentstats))
 
     def on_train_epoch_end(self):
         if self._needLatentStats:
-            stats = self._latentstats.get()
-            self.register_buffer("_latentmean", stats["mean"])
-            self.register_buffer("_latentstd", torch.sqrt(stats["variance"]))
+            stats = tuple(latentstats.get() for latentstats in self._latentstats)
+            for i, stat in enumerate(stats):
+                self.register_buffer(f"_latentmean_{i}", stat["mean"])
+                self.register_buffer(f"_latentvar_{i}", stat["variance"])
             self._needLatentStats = False
             self._latentstats = None
 
     def state_dict(self):
-        state = {"flow": self._flow.state_dict(), "needLatentStats": self._needLatentStats}
+        state = {
+            "flow": self._flow.state_dict(),
+            "needLatentStats": self._needLatentStats,
+            "n_latentstats": self._n_latentstats,
+        }
         if not self._needLatentStats:
             state["latentmean"] = self._latentmean
-            state["latentstd"] = self._latentstd
+            state["latentvar"] = self._latentvar
         return state
 
     def load_state_dict(self, state: dict, strict=True, assign=False):
         self._flow.load_state_dict(state["flow"], strict=strict, assign=assign)
         self._needLatentStats = state["needLatentStats"]
-        if strict and not self._needLatentStats and ("latentmean" not in state or "latentstd" not in state):
+        self._n_latentstats = state["n_latentstats"]
+        if strict and not self._needLatentStats and ("latentmean" not in state or "latentvar" not in state):
             raise RuntimeError("state_dict missing latent statistics.")
-        for var in ("latentmean", "latentstd"):
+        for var in ("latentmean", "latentvar"):
             if var in state:
-                if assign or not hasattr(self, f"_{var}"):
-                    self.register_buffer(f"_{var}", state[var])
-                else:
-                    getattr(self, f"_{var}").copy_(state["latentmean"])
+                for i, tens in enumerate(state[var]):
+                    if assign or not hasattr(self, f"_{var}_{i}"):
+                        self.register_buffer(f"_{var}_{i}", tens)
+                    else:
+                        getattr(self, f"_{var}_{i}").copy_(tens)
 
 
 class INNTranslatorLatent(INNTranslatorBase):
@@ -200,7 +217,17 @@ class INNTranslatorLatent(INNTranslatorBase):
         block_residual: bool = False,
         lr: float = 1e-3,
     ):
-        super().__init__(sourcevae, destvae, n_layers, n_bins, 2, lr)
+        super().__init__(
+            sourcevae=sourcevae,
+            destvae=destvae,
+            n_layers=n_layers,
+            n_bins=n_bins,
+            block_n_layers=block_n_layers,
+            block_layer_width=block_layer_width,
+            block_residual=block_residual,
+            n_latent_vars=2,
+            lr=lr,
+        )
 
     def _step_impl(
         self,
@@ -209,9 +236,11 @@ class INNTranslatorLatent(INNTranslatorBase):
         destbatch: torch.Tensor,
         destbatch_idx: torch.Tensor,
     ):
-        sourcelatent, destlatent, latentmean, latentstd = super()._step_impl(
-            sourcebatch, sourcebatch_idx, destbatch, destbatch_idx
+        sourcelatent, destlatent, latentmean, latentvar = (
+            torch.cat(tens, dim=-1)
+            for tens in super()._step_impl(sourcebatch, sourcebatch_idx, destbatch, destbatch_idx)
         )
+        destlatent = (destlatent - latentmean) / torch.sqrt(latentvar)
         return -self._flow(sourcelatent).log_prob(destlatent).sum() / (destbatch.shape[0] * self._destvae.n_latent_dim)
 
 
@@ -242,7 +271,17 @@ class INNTranslatorSample(INNTranslatorBase):
         block_residual: bool = False,
         lr: float = 1e-3,
     ):
-        super().__init__(sourcevae, destvae, n_layers, n_bins, 1, lr)
+        super().__init__(
+            sourcevae=sourcevae,
+            destvae=destvae,
+            n_layers=n_layers,
+            n_bins=n_bins,
+            block_n_layers=block_n_layers,
+            block_layer_width=block_layer_width,
+            block_residual=block_residual,
+            n_latent_vars=1,
+            lr=lr,
+        )
 
     def _step_impl(
         self,
@@ -251,12 +290,15 @@ class INNTranslatorSample(INNTranslatorBase):
         destbatch: torch.Tensor,
         destbatch_idx: torch.Tensor,
     ):
-        sourcelatent, destlatent, latentmean, latentstd = super()._step_impl(
+        sourcelatent, destlatent, latentmean, latentvar = super()._step_impl(
             sourcebatch, sourcebatch_idx, destbatch, destbatch_idx
         )
 
+        # add empirical variance of the latent mean and latent variance to get total variance of a sample from the variational distribution
+        totalstd = torch.sqrt(latentvar[0] + latentmean[1] ** 2)
+
         sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
         destsample = self._destvae.encode_and_sample_latent(destbatch, destbatch_idx)
-        destsample = (destsample - latentmean) / latentstd
+        destsample = (destsample - latentmean[0]) / totalstd
 
         return -self._flow(sourcesample).log_prob(destsample).sum() / (destbatch.shape[0] * self._destvae.n_latent_dim)
