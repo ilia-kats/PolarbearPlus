@@ -1,0 +1,38 @@
+# lightning.pytorch==2.2.0.post0
+save_dir: ../../../experiments/inntranslator/latent_atac2rna_v1
+model:
+  class_path: polarbearplus.INNTranslatorLatent
+  init_args:
+    n_layers: 5
+    n_bins: 16
+    block_n_layers: 2
+    block_layer_width: 64
+    block_residual: true
+    lr: 0.001
+data:
+  batch_size: 1024
+  n_workers: 2
+  pin_memory: true
+  persistent_workers: true
+  data_dir: ../../data/snareseq
+vae:
+  encoder: atac
+  decoder: rna
+  encoder_checkpoint: ../../../experiments/atacvae/settings_polarbear/0/checkpoints/last.ckpt
+  decoder_checkpoint: ../../../experiments/rnavae/settings_polarbear/0/checkpoints/last.ckpt
+trainer:
+  max_epochs: 2000
+  devices:
+    - 1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        every_n_epochs: 50
+        monitor: -validation_likelihood
+        mode: min
+        save_top_k: 1
+        save_on_train_epoch_end: false
+        save_last: link
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 1
+  deterministic: False # cumsum is not deterministic. setting this to warn spews warnings on every training step
