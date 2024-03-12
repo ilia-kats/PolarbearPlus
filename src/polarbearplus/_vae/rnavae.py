@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pyro
 import pyro.distributions as dist
 import torch
@@ -94,6 +96,10 @@ class _RNAVAE(VAEBase):
     def latent_name(self):
         return "z_n"
 
+    @property
+    def observed_name(self):
+        return "data"
+
     def get_extra_state(self):
         return {"ngenes": self.ngenes, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
@@ -102,19 +108,14 @@ class _RNAVAE(VAEBase):
         self.nbatches = state["nbatches"]
         self._n_latent_dim = state["n_latent_dim"]
 
-    def model(self, expression_mat: torch.Tensor | None, batch_idx: torch.Tensor, ncells: int | None = None):
+    def model(self, expression_mat: torch.Tensor | None, batch_idx: torch.Tensor):
         """Generative model.
 
         Args:
             expression_mat: Cells x genes expression matrix.
             batch_idx: Index of the experimental batch for each cell.
-            ncells: Number of cells. Only required in generative mode (when no expression matrix is given).
         """
-        if expression_mat is None and ncells is None:
-            raise ValueError("Need either expression_mat or ncells, but both are None.")
-        if ncells is None:
-            ncells = expression_mat.shape[0]
-        with pyro.plate("cells", size=ncells, dim=-2):
+        with pyro.plate("cells", size=batch_idx.shape[0], dim=-2):
             l_n = pyro.sample(
                 "l_n", dist.LogNormal(self.logbatchmeans[batch_idx, None], self.logbatchstds[batch_idx, None])
             )  # (ncells, 1)
@@ -128,7 +129,7 @@ class _RNAVAE(VAEBase):
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
             with pyro.plate("genes", size=self.ngenes, dim=-1):
                 pyro.sample(
-                    "data",
+                    self.observed_name,
                     dist.GammaPoisson(concentration=1 / (theta_b + self.eps), rate=1 / (theta_b * mu + self.eps)),
                     obs=expression_mat,
                 )
@@ -190,6 +191,16 @@ class _RNAVAE(VAEBase):
             *self.encode_latent(expression_mat, batch_idx), *self.encode_auxiliary(expression_mat, batch_idx)
         )
 
+    def _baseguide(
+        self, ncells: int, sizefactor_means: torch.Tensor, sizefactor_stdevs: torch.Tensor, latentsample: Callable
+    ):
+        with pyro.plate("cells", size=ncells, dim=-2):
+            pyro.sample(
+                "l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None] + self.eps)
+            )  # (ncells, 1)
+            with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
+                latentsample()
+
     def reconstruction_guide(
         self,
         latent_means: torch.Tensor,
@@ -207,12 +218,29 @@ class _RNAVAE(VAEBase):
             sizefactor_means: Cells x 1 latent sizefactor mean matrix.
             sizefactor_stdevs: Cells x 1 latent sizefactor scale matrix.
         """
-        with pyro.plate("cells", size=latent_means.shape[0], dim=-2):
-            pyro.sample(
-                "l_n", dist.LogNormal(sizefactor_means[:, None], sizefactor_stdevs[:, None] + self.eps)
-            )  # (ncells, 1)
-            with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                pyro.sample(self.latent_name, dist.Normal(latent_means, latent_stdevs + self.eps))  # (ncells, nlatent)
+        self._baseguide(
+            latent_means.shape[0],
+            sizefactor_means,
+            sizefactor_stdevs,
+            lambda: pyro.sample(self.latent_name, dist.Normal(latent_means, latent_stdevs + self.eps)),
+        )
+
+    def sample_guide(self, sample: torch.Tensor, sizefactor_means: torch.Tensor, sizefactor_stdevs: torch.Tensor):
+        """Variational posterior given a sample from the variatonal distribution.
+
+        This can be used for translating from another modality.
+
+        Args:
+            sample: A sample from the variational distribution
+            sizefactor_means: Cells x 1 latent sizefactor mean matrix.
+            sizefactor_stdevs: Cells x 1 latent sizefactor scale matrix.
+        """
+        self._baseguide(
+            sample.shape[0],
+            sizefactor_means,
+            sizefactor_stdevs,
+            lambda: pyro.sample(self.latent_name, dist.Delta(sample)),
+        )
 
 
 class RNAVAE(LightningVAEBase):

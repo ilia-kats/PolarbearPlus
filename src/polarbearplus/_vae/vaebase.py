@@ -24,13 +24,21 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
     def latent_name(self):
         pass
 
+    @property
     @abstractmethod
-    def encode_latent(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor] | torch.Tensor:
+    def observed_name(self):
+        pass
+
+    @abstractmethod
+    def encode_latent(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor]:
         """Apply the encoder network.
 
         Args:
             batch: Data matrix.
             batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            Parameters of the variational distribution.
         """
         pass
 
@@ -40,6 +48,9 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         Args:
             batch: Data matrix.
             batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A sample of the latent variables.
         """
         trace = poutine.trace(
             poutine.block(self.guide, expose_fn=lambda msg: msg["name"] == self.latent_name)
@@ -48,8 +59,85 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
             raise RuntimeError(f"Unexpected number of nodes in guide trace: {len(trace.nodes)}")
         return trace.nodes[self.latent_name]["value"]
 
+    def decoded_likelihood(
+        self,
+        latent: tuple[torch.Tensor],
+        auxiliary: tuple[torch.Tensor],
+        observed: torch.Tensor,
+        batch_idx: torch.Tensor,
+    ) -> float:
+        """Negative log-likelihood of observed data given the latent embedding.
+
+        Args:
+            latent: The latent embedding, usually the parameters of the variational posterior.
+            auxiliary: The auxiliary variables.
+            observed: Data matrix.
+            batch_idx: Index of the experimental batch for each cell.
+        """
+        guide_trace = poutine.trace(self.reconstruction_guide).get_trace(*latent, *auxiliary)
+        model_trace = poutine.trace(
+            poutine.block(poutine.replay(self.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
+        ).get_trace(observed, batch_idx)
+        return -model_trace.log_prob_sum()
+
+    def decode(self, latent: torch.Tensor, auxiliary: tuple[torch.Tensor], batch_idx: torch.Tensor) -> torch.Tensor:
+        """Sample from the variational posterior given its parameters.
+
+        Args:
+            latent: The latent embedding, usually the parameters of the variational posterior.
+            auxiliary: Auxiliary variables.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A sample of observed data.
+        """
+        guide_trace = poutine.trace(self.reconstruction_guide).get_trace(*latent, *auxiliary)
+        model_trace = poutine.trace(poutine.replay(self.model, guide_trace)).get_trace(None, batch_idx)
+        return model_trace.nodes[self.observed_name]["value"]
+
+    def _sample_guide_trace(self, latent_sample: torch.Tensor, auxiliary: tuple[torch.Tensor]) -> pyro.poutine.Trace:
+        guide_trace = poutine.trace(self.sample_guide).get_trace(latent_sample, *auxiliary)
+        guide_trace.nodes[self.latent_name][
+            "value"
+        ] = latent_sample  # we can't use poutine.condition here because it sets is_observed = True, which won't work with replay
+        return guide_trace
+
+    def decoded_sample_likelihood(
+        self, latent_sample: torch.Tensor, observed: torch.Tensor, batch_idx: torch.Tensor
+    ) -> float:
+        """Negative log-likelihood of observed data given a sample from the variational distribution.
+
+        Args:
+            latent_sample: A sample from the variational distribution.
+            observed: Data matrix.
+            batch_idx: Index of the experimental batch for each cell.
+        """
+        auxiliary = self.encode_auxiliary(observed, batch_idx)
+        guide_trace = self._sample_guide_trace(latent_sample, auxiliary)
+        model_trace = poutine.trace(
+            poutine.block(poutine.replay(self.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
+        ).get_trace(observed, batch_idx)
+        return -model_trace.log_prob_sum()
+
+    def decode_and_sample(
+        self, latent_sample: torch.Tensor, auxiliary: tuple[torch.Tensor], batch_idx: torch.Tensor
+    ) -> torch.Tensor:
+        """Sample data given a sample from the variational distribution.
+
+        Args:
+            latent_sample: A sample from the variational distribution.
+            auxiliary: Auxiliary variables.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            A sample of observed data
+        """
+        guide_trace = self._sample_guide_trace(latent_sample, auxiliary)
+        model_trace = poutine.trace(poutine.replay(self.model, guide_trace)).get_trace(None, batch_idx)
+        return model_trace.nodes[self.observed_name]["value"]
+
     @abstractmethod
-    def encode_auxiliary(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor] | torch.Tensor:
+    def encode_auxiliary(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode auxiliary variables.
 
         Auxiliary variables are variables that are not need for the latent embedding,
@@ -69,6 +157,18 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
 
         Args:
             *latent_vars: Latent and auxiliary variables
+        """
+        pass
+
+    @abstractmethod
+    def sample_guide(self, sample: torch.Tensor, *auxiliary_vars):
+        """Variational posterior given a sample from the variatonal distribution.
+
+        This can be used for translating from another modality.
+
+        Args:
+            sample: A sample from the variational distribution.
+            *auxiliary_vars: Auxiliary variables
         """
         pass
 
@@ -149,7 +249,7 @@ class LightningVAEBase(L.LightningModule):
     def decoder(self):
         return self._vae.decoder
 
-    def encode_latent(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor] | torch.Tensor:
+    def encode_latent(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor]:
         """Apply the encoder network.
 
         Args:
@@ -158,7 +258,7 @@ class LightningVAEBase(L.LightningModule):
         """
         return self._vae.encode_latent(batch, batch_idx)
 
-    def encode_auxiliary(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor] | torch.Tensor:
+    def encode_auxiliary(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode auxiliary variables.
 
         Auxiliary variables are variables that are not need for the latent embedding,
@@ -179,20 +279,34 @@ class LightningVAEBase(L.LightningModule):
         """
         return self._vae.encode_and_sample_latent(batch, batch_idx)
 
-    def decoded_likelihood(self, latent: tuple[torch.Tensor], observed: torch.Tensor, batch_idx: torch.Tensor) -> float:
+    def decoded_likelihood(
+        self,
+        latent: tuple[torch.Tensor],
+        auxiliary: tuple[torch.Tensor],
+        observed: torch.Tensor,
+        batch_idx: torch.Tensor,
+    ) -> float:
         """Negative log-likelihood of observed data given the latent embedding.
 
         Args:
             latent: The latent embedding, usually the parameters of the variational posterior.
+            auxiliary: The auxiliary variables.
             observed: Data matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        with self.device:
-            guide_trace = poutine.trace(self._vae.reconstruction_guide).get_trace(*latent)
-            model_trace = poutine.trace(
-                poutine.block(poutine.replay(self._vae.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
-            ).get_trace(observed, batch_idx)
-            return -model_trace.log_prob_sum()
+        return self._vae.decoded_likelihood(latent, auxiliary, observed, batch_idx)
+
+    def decode(
+        self, latent: tuple[torch.Tensor], auxiliary: tuple[torch.Tensor], batch_idx: torch.Tensor
+    ) -> torch.Tensor:
+        """Sample from the variational posterior given its parameters.
+
+        Args:
+            latent: The latent embedding, usually the parameters of the variational posterior.
+            auxiliary: Auxiliary variables.
+            batch_idx: Index of the experimental batch for each cell.
+        """
+        return self._vae.decode(latent, auxiliary, batch_idx)
 
     def decoded_sample_likelihood(
         self, latent_sample: torch.Tensor, observed: torch.Tensor, batch_idx: torch.Tensor
@@ -204,15 +318,19 @@ class LightningVAEBase(L.LightningModule):
             observed: Data matrix.
             batch_idx: Index of the experimental batch for each cell.
         """
-        with self.device:
-            guide_trace = poutine.trace(self._vae.guide).get_trace(observed, batch_idx)
-            guide_trace.nodes[self._vae.latent_name][
-                "value"
-            ] = latent_sample  # we can't use poutine.condition here because it sets is_observed = True, which won't work with replay
-            model_trace = poutine.trace(
-                poutine.block(poutine.replay(self._vae.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
-            ).get_trace(observed, batch_idx)
-            return -model_trace.log_prob_sum()
+        return self._vae.decoded_sample_likelihood(latent_sample, observed, batch_idx)
+
+    def decode_and_sample(
+        self, latent_sample: torch.Tensor, auxiliary: tuple[torch.Tensor], batch_idx: torch.Tensor
+    ) -> torch.Tensor:
+        """Sample data given a sample from the variational distribution.
+
+        Args:
+            latent_sample: A sample from the variational distribution.
+            auxiliary: Auxiliary variables.
+            batch_idx: Index of the experimental batch for each cell.
+        """
+        return self._vae.decode_and_sample(latent_sample, auxiliary, batch_idx)
 
     @property
     def n_latent_dim(self):

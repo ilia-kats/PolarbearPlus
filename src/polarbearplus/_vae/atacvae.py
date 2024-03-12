@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pyro
 import pyro.distributions as dist
 import torch
@@ -215,6 +217,10 @@ class _ATACVAE(VAEBase):
     def latent_name(self):
         return "z_n"
 
+    @property
+    def observed_name(self):
+        return "data"
+
     def get_extra_state(self):
         return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
@@ -253,20 +259,14 @@ class _ATACVAE(VAEBase):
         """
         return (self._l_encoder(region_mat, batch_idx),)  # (ncells, 1)
 
-    def model(self, region_mat: torch.Tensor | None, batch_idx: torch.Tensor, ncells: int | None = None):
+    def model(self, region_mat: torch.Tensor | None, batch_idx: torch.Tensor):
         """Generative model.
 
         Args:
             region_mat: Cells x regions binary peak matrix.
             batch_idx: Index of the experimental batch for each cell.
-            ncells: Number of cells. Only required in generative mode (when no region matrix is given).
         """
-        if region_mat is None and ncells is None:
-            raise ValueError("Need either region_mat or ncells, but both are None.")
-        if ncells is None:
-            ncells = region_mat.shape[0]
-
-        with pyro.plate("cells", size=ncells, dim=-2):
+        with pyro.plate("cells", size=batch_idx.shape[0], dim=-2):
             # this will be replaced by the encoded l_n from the guide during inference
             # can't use pyro.deterministic because that sets is_observed=True, so won't
             # be replaced by guide value. We want l_n in the trace for analysis
@@ -279,7 +279,7 @@ class _ATACVAE(VAEBase):
 
             probs = pyro.deterministic("mu", y_n * l_n * self.r)
             with pyro.plate("regions", size=self.nregions, dim=-1):
-                pyro.sample("data", dist.Bernoulli(probs=probs), obs=region_mat)
+                pyro.sample(self.observed_name, dist.Bernoulli(probs=probs), obs=region_mat)
 
     def guide(self, region_mat: torch.Tensor, batch_idx: torch.Tensor):
         """Variational posterior.
@@ -292,6 +292,12 @@ class _ATACVAE(VAEBase):
             *self.encode_latent(region_mat, batch_idx), *self.encode_auxiliary(region_mat, batch_idx)
         )
 
+    def _baseguide(self, ncells: int, l_n: torch.Tensor, latentsample: Callable):
+        with pyro.plate("cells", size=ncells, dim=-2):
+            pyro.sample("l_n", dist.Delta(l_n))
+            with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
+                latentsample()
+
     def reconstruction_guide(self, latent_means: torch.Tensor, latent_stdevs: torch.Tensor, l_n: torch.Tensor):
         """Variational posterior given the encoded data.
 
@@ -302,10 +308,20 @@ class _ATACVAE(VAEBase):
             latent_stdevs: Cells x latent_vars latent standard deviation matrix.
             l_n: Cells x 1 matrix of cell-specific factors.
         """
-        with pyro.plate("cells", size=latent_means.shape[0], dim=-2):
-            pyro.sample("l_n", dist.Delta(l_n))
-            with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                pyro.sample("z_n", dist.Normal(latent_means, latent_stdevs))
+        self._baseguide(
+            latent_means.shape[0], l_n, lambda: pyro.sample(self.latent_name, dist.Normal(latent_means, latent_stdevs))
+        )
+
+    def sample_guide(self, sample: torch.Tensor, l_n: torch.Tensor):
+        """Variational posterior given a sample from the variatonal distribution.
+
+        This can be used for translating from another modality.
+
+        Args:
+            sample: A sample from the variational distribution
+            l_n: Cells x 1 matrix of cell-specific factors.
+        """
+        self._baseguide(sample.shape[0], l_n, lambda: pyro.sample(self.latent_name, dist.Delta(sample)))
 
 
 class ATACVAE(LightningVAEBase):

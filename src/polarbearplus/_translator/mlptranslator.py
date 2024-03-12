@@ -106,9 +106,7 @@ class MLPTranslatorLatent(MLPTranslatorBase):
         translatedstdev = translatedstdev.exp()
 
         return (
-            self._destvae.decoded_likelihood(
-                (translatedmean, translatedstdev, *destauxiliary), destbatch, destbatch_idx
-            )
+            self._destvae.decoded_likelihood((translatedmean, translatedstdev), destauxiliary, destbatch, destbatch_idx)
             / destbatch.numel()
         )
 
