@@ -1,6 +1,7 @@
 import inspect
 
 import torch
+from tqdm.auto import tqdm
 
 from .._utils import MLP
 from .._vae import LightningVAEBase
@@ -23,6 +24,7 @@ class MLPTranslatorBase(TranslatorBase):
             dimension: mean and standard deviation.
         dropout: Dropout probability in the translator. Used only if `n_layers > 0`.
         lr: Learning rate.
+        predict_n_samples: Number of samples to take during prediction.
     """
 
     def __init__(
@@ -34,8 +36,9 @@ class MLPTranslatorBase(TranslatorBase):
         n_latent_vars: int = 1,
         dropout: float = 0.1,
         lr: float = 1e-3,
+        predict_n_samples: int = 1000,
     ):
-        super().__init__(sourcevae, destvae, lr)
+        super().__init__(sourcevae, destvae, lr, predict_n_samples)
         if n_layers == 0:
             self._translator = torch.nn.Linear(
                 n_latent_vars * self._sourcevae.n_latent_dim, n_latent_vars * self._destvae.n_latent_dim
@@ -77,6 +80,7 @@ class MLPTranslatorLatent(MLPTranslatorBase):
         layer_width: Width of the hidden layers.
         dropout: Dropout probability in the translator. Used only if `n_layers > 0`.
         lr: Learning rate.
+        predict_n_samples: Number of samples to take during prediction.
     """
 
     def __init__(
@@ -87,8 +91,9 @@ class MLPTranslatorLatent(MLPTranslatorBase):
         layer_width: int,
         dropout: float = 0.1,
         lr: float = 1e-3,
+        predict_n_samples: int = 1000,
     ):
-        super().__init__(sourcevae, destvae, n_layers, layer_width, 2, dropout, lr)
+        super().__init__(sourcevae, destvae, n_layers, layer_width, 2, dropout, lr, predict_n_samples)
 
     def _step_impl(
         self,
@@ -110,6 +115,24 @@ class MLPTranslatorLatent(MLPTranslatorBase):
             / destbatch.numel()
         )
 
+    def predict_step(self, batch, batch_idx):
+        sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+        sourcelatent = self._sourcevae.encode_latent(sourcebatch, sourcebatch_idx)
+
+        translatedmean, translatedstdev = torch.tensor_split(
+            self._translator(torch.cat(sourcelatent, dim=-1)), 2, dim=-1
+        )
+        translatedstdev = translatedstdev.exp()
+
+        for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
+            self._stats.add(
+                self._destvae.decode_and_sample_normalized((translatedmean, translatedstdev), destbatch_idx)
+                .cpu()
+                .numpy()
+            )
+
+        return self._collect_predict_stats()
+
 
 class MLPTranslatorSample(MLPTranslatorBase):
     """Translator network that translates between samples from the variational distribution.
@@ -122,6 +145,7 @@ class MLPTranslatorSample(MLPTranslatorBase):
         layer_width: Width of the hidden layers.
         dropout: Dropout probability in the translator. Used only if `n_layers > 0`.
         lr: Learning rate.
+        predict_n_samples: Number of samples to take during prediction.
     """
 
     def __init__(
@@ -132,6 +156,7 @@ class MLPTranslatorSample(MLPTranslatorBase):
         layer_width: int,
         dropout: float = 0.1,
         lr: float = 1e-3,
+        predict_n_samples: int = 1000,
     ):
         super().__init__(sourcevae, destvae, n_layers, layer_width, 1, dropout, lr)
 
@@ -145,3 +170,15 @@ class MLPTranslatorSample(MLPTranslatorBase):
         sourcelatent = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
         translatedlatent = self._translator(sourcelatent)
         return self._destvae.decoded_sample_likelihood(translatedlatent, destbatch, destbatch_idx) / destbatch.numel()
+
+    def predict_step(self, batch, batch_idx):
+        sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+
+        for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
+            sourcelatent = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
+            translatedlatent = self._translator(sourcelatent)
+            decoded = self._destvae.decode_normalized(translatedlatent, destbatch_idx)
+
+            self._stats.add(decoded.cpu().numpy())
+
+        return self._collect_predict_stats()

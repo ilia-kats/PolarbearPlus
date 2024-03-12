@@ -100,6 +100,10 @@ class _RNAVAE(VAEBase):
     def observed_name(self):
         return "data"
 
+    @property
+    def normalized_name(self):
+        return "rho_n"
+
     def get_extra_state(self):
         return {"ngenes": self.ngenes, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
@@ -240,6 +244,24 @@ class _RNAVAE(VAEBase):
             sizefactor_means,
             sizefactor_stdevs,
             lambda: pyro.sample(self.latent_name, dist.Delta(sample)),
+        )
+
+    def normalized_guide(self, latent_means: torch.Tensor, latent_stdevs: torch.Tensor):
+        """Variational posterior given the encoded data, without auxiliary variables.
+
+        This is useful to draw normalized (corrected for sequencing depth) samples from
+        the variational posterior. In this case the auxiliary variables will be set to
+        a constant value, the unnormalized samples will be incorrect.
+
+        Args:
+            latent_means: Cells x latent_vars latent mean matrix.
+            latent_stdevs: Cells x latent_vars latent standard deviation matrix.
+        """
+        self._baseguide(
+            latent_means.shape[0],
+            self.zero[None],
+            self.one[None],
+            lambda: pyro.sample(self.latent_name, dist.Normal(latent_means, latent_stdevs + self.eps)),
         )
 
 

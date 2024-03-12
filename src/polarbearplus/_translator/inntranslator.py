@@ -1,7 +1,6 @@
 import inspect
 from abc import abstractmethod
 
-import numpy_onlinestats as npo
 import torch
 from pyro.ops.streaming import CountMeanVarianceStats
 from tqdm.auto import tqdm
@@ -89,8 +88,6 @@ class INNTranslatorBase(TranslatorBase):
         predict_n_samples: Number of samples to take during prediction.
     """
 
-    _predict_quantiles = (0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
-
     def __init__(
         self,
         sourcevae: LightningVAEBase,
@@ -104,10 +101,9 @@ class INNTranslatorBase(TranslatorBase):
         lr: float = 1e-3,
         predict_n_samples: int = 1000,
     ):
-        super().__init__(sourcevae, destvae, lr)
+        super().__init__(sourcevae, destvae, lr, predict_n_samples)
 
         self._n_latent_vars = n_latent_vars
-        self._n_predict_samples = predict_n_samples
 
         self._flow = CouplingNSFWithRotation(
             features=self._n_latent_vars * self._destvae.n_latent_dim,
@@ -161,23 +157,6 @@ class INNTranslatorBase(TranslatorBase):
     @property
     def _latentvar(self):
         return tuple(getattr(self, f"_latentvar_{i}") for i in range(self._n_latentstats))
-
-    def on_predict_batch_start(self, batch, batch_idx, dataloader_idx=0):
-        if batch_idx == 0 or batch_idx >= self.trainer.num_predict_batches[dataloader_idx] - 1:
-            self._stats = npo.NpOnlineStats()
-
-    def on_predict_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
-        self._stats.reset()
-
-    def on_predict_end(self):
-        del self._stats
-
-    def _collect_predict_stats(self):
-        stats = {"mean": self._stats.mean(), "var": self._stats.var()}
-        for q in self._predict_quantiles:
-            stats[f"q{q}"] = self._stats.quantile(q)
-
-        return stats
 
     def on_train_epoch_end(self):
         if self._needLatentStats:

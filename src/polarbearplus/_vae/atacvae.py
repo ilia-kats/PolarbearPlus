@@ -221,6 +221,10 @@ class _ATACVAE(VAEBase):
     def observed_name(self):
         return "data"
 
+    @property
+    def normalized_name(self):
+        return "norm_y_n"
+
     def get_extra_state(self):
         return {"nregions": self.nregions, "nbatches": self.nbatches, "n_latent_dim": self._n_latent_dim}
 
@@ -275,9 +279,9 @@ class _ATACVAE(VAEBase):
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
                 z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
-            y_n = self._decoder(z_n, batch_idx)  # (ncells, nregions)
-
-            probs = pyro.deterministic("mu", y_n * l_n * self.r)
+            y_n = pyro.deterministic("y_n", self._decoder(z_n, batch_idx))  # (ncells, nregions)
+            regionscaled = pyro.deterministic("norm_y_n", y_n * self.r)
+            probs = pyro.deterministic("mu", regionscaled * l_n)
             with pyro.plate("regions", size=self.nregions, dim=-1):
                 pyro.sample(self.observed_name, dist.Bernoulli(probs=probs), obs=region_mat)
 
@@ -322,6 +326,23 @@ class _ATACVAE(VAEBase):
             l_n: Cells x 1 matrix of cell-specific factors.
         """
         self._baseguide(sample.shape[0], l_n, lambda: pyro.sample(self.latent_name, dist.Delta(sample)))
+
+    def normalized_guide(self, latent_means: torch.Tensor, latent_stdevs: torch.Tensor):
+        """Variational posterior given the encoded data, without auxiliary variables.
+
+        This is useful to draw normalized (corrected for sequencing depth) samples from
+        the variational posterior. In this case the auxiliary variables will be set to
+        a constant value, the unnormalized samples will be incorrect.
+
+        Args:
+            latent_means: Cells x latent_vars latent mean matrix.
+            latent_stdevs: Cells x latent_vars latent standard deviation matrix.
+        """
+        self._baseguide(
+            latent_means.shape[0],
+            self.one,
+            lambda: pyro.sample(self.latent_name, dist.Normal(latent_means, latent_stdevs)),
+        )
 
 
 class ATACVAE(LightningVAEBase):

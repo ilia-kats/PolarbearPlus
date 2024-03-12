@@ -29,6 +29,11 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
     def observed_name(self):
         pass
 
+    @property
+    @abstractmethod
+    def normalized_name(self):
+        pass
+
     @abstractmethod
     def encode_latent(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor]:
         """Apply the encoder network.
@@ -95,6 +100,21 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         model_trace = poutine.trace(poutine.replay(self.model, guide_trace)).get_trace(None, batch_idx)
         return model_trace.nodes[self.observed_name]["value"]
 
+    def decode_normalized(self, latent_sample: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
+        """Decode a sample from the variational posterior.
+
+        Args:
+            latent_sample: A sample from the variational posterior.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            Normalized (corrected for sequencing depth) decoded data.
+        """
+        model_trace = poutine.trace(poutine.condition(self.model, {self.latent_name: latent_sample})).get_trace(
+            None, batch_idx
+        )
+        return model_trace.nodes[self.normalized_name]["value"]
+
     def _sample_guide_trace(self, latent_sample: torch.Tensor, auxiliary: tuple[torch.Tensor]) -> pyro.poutine.Trace:
         guide_trace = poutine.trace(self.sample_guide).get_trace(latent_sample, *auxiliary)
         guide_trace.nodes[self.latent_name][
@@ -136,6 +156,20 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         model_trace = poutine.trace(poutine.replay(self.model, guide_trace)).get_trace(None, batch_idx)
         return model_trace.nodes[self.observed_name]["value"]
 
+    def decode_and_sample_normalized(self, latent: tuple[torch.Tensor], batch_idx: torch.Tensor) -> torch.Tensor:
+        """Sample from the variational distribution given its parameters.
+
+        Args:
+            latent: The latent embedding, usually the parameters of the variational posterior.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            Normalized (corrected for sequencing depth) decoded data.
+        """
+        guide_trace = poutine.trace(self.normalized_guide).get_trace(*latent)
+        model_trace = poutine.trace(poutine.replay(self.model, guide_trace)).get_trace(None, batch_idx)
+        return model_trace.nodes[self.normalized_name]["value"]
+
     @abstractmethod
     def encode_auxiliary(self, batch: torch.Tensor, batch_idx: torch.Tensor) -> tuple[torch.Tensor]:
         """Encode auxiliary variables.
@@ -156,7 +190,7 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         This can be used for translating from another modality.
 
         Args:
-            *latent_vars: Latent and auxiliary variables
+            *latent_vars: Latent and auxiliary variables>
         """
         pass
 
@@ -168,9 +202,21 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
 
         Args:
             sample: A sample from the variational distribution.
-            *auxiliary_vars: Auxiliary variables
+            *auxiliary_vars: Auxiliary variables.
         """
         pass
+
+    @abstractmethod
+    def normalized_guide(self, *latent_vars):
+        """Variational posterior given the encoded data, without auxiliary variables.
+
+        This is useful to draw normalized (corrected for sequencing depth) samples from
+        the variational posterior. In this case the auxiliary variables will be set to
+        a constant value, the unnormalized samples will be incorrect.
+
+        Args:
+            *latent_vars: Latent variables.
+        """
 
     @abstractmethod
     def model(self, batch: torch.Tensor, batch_idx: torch.Tensor):
@@ -308,6 +354,18 @@ class LightningVAEBase(L.LightningModule):
         """
         return self._vae.decode(latent, auxiliary, batch_idx)
 
+    def decode_normalized(self, latent_sample: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
+        """Decode a sample from the variational posterior.
+
+        Args:
+            latent_sample: A sample from the variational posterior.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            Normalized (corrected for sequencing depth) decoded data.
+        """
+        return self._vae.decode_normalized(latent_sample, batch_idx)
+
     def decoded_sample_likelihood(
         self, latent_sample: torch.Tensor, observed: torch.Tensor, batch_idx: torch.Tensor
     ) -> float:
@@ -331,6 +389,18 @@ class LightningVAEBase(L.LightningModule):
             batch_idx: Index of the experimental batch for each cell.
         """
         return self._vae.decode_and_sample(latent_sample, auxiliary, batch_idx)
+
+    def decode_and_sample_normalized(self, latent: tuple[torch.Tensor], batch_idx: torch.Tensor) -> torch.Tensor:
+        """Sample from the variational distribution given its parameters.
+
+        Args:
+            latent: The latent embedding, usually the parameters of the variational posterior.
+            batch_idx: Index of the experimental batch for each cell.
+
+        Returns:
+            Normalized (corrected for sequencing depth) decoded data.
+        """
+        return self._vae.decode_and_sample_normalized(latent, batch_idx)
 
     @property
     def n_latent_dim(self):

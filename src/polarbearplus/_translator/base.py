@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import lightning as L
+import numpy_onlinestats as npo
 import torch
 
 from .._vae import LightningVAEBase
@@ -13,9 +14,14 @@ class TranslatorBase(L.LightningModule, ABC):
         sourcevae: The encoder VAE.
         destvae: The decoder VAE.
         lr: Learning rate.
+        predict_n_samples: Number of samples to take during prediction.
     """
 
-    def __init__(self, sourcevae: LightningVAEBase, destvae: LightningVAEBase, lr: float = 1e-3):
+    _predict_quantiles = (0.025, 0.05, 0.25, 0.5, 0.75, 0.95, 0.975)
+
+    def __init__(
+        self, sourcevae: LightningVAEBase, destvae: LightningVAEBase, lr: float = 1e-3, predict_n_samples: int = 1000
+    ):
         super().__init__()
         self._sourcevae = sourcevae
         self._destvae = destvae
@@ -23,6 +29,7 @@ class TranslatorBase(L.LightningModule, ABC):
         self._destvae.freeze()
 
         self._lr = lr
+        self._n_predict_samples = predict_n_samples
 
     @property
     @abstractmethod
@@ -78,3 +85,20 @@ class TranslatorBase(L.LightningModule, ABC):
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         return self._step(batch, batch_idx, dataloader_idx, "-test_likelihood")
+
+    def on_predict_batch_start(self, batch, batch_idx, dataloader_idx=0):
+        if batch_idx == 0 or batch_idx >= self.trainer.num_predict_batches[dataloader_idx] - 1:
+            self._stats = npo.NpOnlineStats()
+
+    def on_predict_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
+        self._stats.reset()
+
+    def on_predict_end(self):
+        del self._stats
+
+    def _collect_predict_stats(self):
+        stats = {"mean": self._stats.mean(), "var": self._stats.var()}
+        for q in self._predict_quantiles:
+            stats[f"q{q}"] = self._stats.quantile(q)
+
+        return stats
