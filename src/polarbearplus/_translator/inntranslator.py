@@ -256,14 +256,13 @@ class INNTranslatorLatent(INNTranslatorBase):
         )
 
         nlatents = len(destlatent)
-        auxiliary = self._destvae.encode_auxiliary(destbatch, destbatch_idx)
 
         for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
             flowsample = self._flow(torch.cat(sourcelatent, dim=-1)).sample() * torch.sqrt(
                 torch.cat(latentvar, dim=-1)
             ) + torch.cat(latentmean, dim=-1)
-            datasample = self._destvae.decode(
-                torch.tensor_split(flowsample, nlatents, dim=-1), auxiliary, destbatch_idx
+            datasample = self._destvae.decode_and_sample_normalized(
+                torch.tensor_split(flowsample, nlatents, dim=-1), destbatch_idx
             )
 
             self._stats.add(datasample.cpu().numpy())
@@ -340,12 +339,10 @@ class INNTranslatorSample(INNTranslatorBase):
         )
         totalstd = torch.sqrt(latentvar[0] + latentmean[1] ** 2)
 
-        auxiliary = self._destvae.encode_auxiliary(destbatch, destbatch_idx)
-
         for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
             sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
             flowsample = self._flow(sourcesample).sample() * totalstd + latentmean[0]
-            datasample = self._destvae.decode_and_sample(flowsample, auxiliary, destbatch_idx)
+            datasample = self._destvae.decode_normalized(flowsample, destbatch_idx)
 
             self._stats.add(datasample.cpu().numpy())
 
