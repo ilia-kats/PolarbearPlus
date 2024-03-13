@@ -2,6 +2,8 @@ import os
 import urllib.request
 
 import lightning as L
+import numpy as np
+import pandas as pd
 import torch
 from scipy.sparse import spmatrix
 from torch.utils.data import DataLoader, Dataset
@@ -65,7 +67,18 @@ class PolarbearDataModuleBase(L.LightningDataModule):
     """
 
     _base_url = "https://noble.gs.washington.edu/~ranz0/Polarbear/data/"
-    _files = {}
+    _files = {
+        "atac_single": "adultbrainfull50_atac_outer_single.mtx",  # Single assay ATACseq
+        "atac_snareseq": "adultbrainfull50_atac_outer_snareseq.mtx",  # SNARE-seq ATACseq
+        "rna_snareseq": "adultbrainfull50_rna_outer_snareseq.mtx",  # SNARE-seq RNAseq
+        "rna_single": "adultbrainfull50_rna_outer_single.mtx",  # Single assay RNAseq
+        "snareseq_barcodes": "adultbrainfull50_rna_outer_snareseq_barcodes.tsv",  # SNARE-seq cells
+        "single_barcodes": "adultbrainfull50_rna_outer_single_barcodes.tsv",  # single assay cells
+        "peak_annotation": "adultbrainfull50_atac_outer_peaks.txt",  # ATACseq peaks
+        "genenames": "adultbrainfull50_rna_outer_genes.txt",  # RNAseq genes
+    }
+
+    _split_files = {"train": "idx_train.txt", "val": "idx_val.txt", "test": "idx_test.txt"}
 
     def __init__(
         self,
@@ -97,6 +110,20 @@ class PolarbearDataModuleBase(L.LightningDataModule):
             if not os.path.isfile(filepath):
                 os.makedirs(self._data_dir, exist_ok=True)
                 download(url, filepath, filedesc)
+
+        need_split = False
+        for filename in self._split_files.values():
+            filepath = os.path.join(self._data_dir, filename)
+            if not os.path.isfile(filepath):
+                need_split = True
+                break
+        if need_split:
+            snare_bcs = pd.read_table(
+                os.path.join(self._data_dir, self._files["snareseq_barcodes"]), sep="\t", index_col=0
+            )
+            split = torch.utils.data.random_split(snare_bcs, [0.6, 0.2, 0.2])
+            for fname, dset in zip(self._split_files.values(), split, strict=False):
+                np.savetxt(os.path.join(self._data_dir, fname), dset.indices, fmt="%d")
 
     def _get_dataloader(self, dset, shuffle=False):
         return DataLoader(

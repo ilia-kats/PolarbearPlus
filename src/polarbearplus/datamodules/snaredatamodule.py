@@ -5,7 +5,7 @@ from typing import Literal
 import numpy as np
 import torch
 from scipy.io import mmread
-from torch.utils.data import StackDataset, random_split
+from torch.utils.data import StackDataset, Subset
 
 from .utils import PolarbearDataModuleBase, SparseDataset
 
@@ -34,7 +34,6 @@ class SNAREDataModule(PolarbearDataModuleBase):
     ):
         super().__init__(batch_size, n_workers, pin_memory, persistent_workers, data_dir)
         self._direction = direction
-        self._num_cells = None
         self._num_genes = None
         self._num_peaks = None
 
@@ -53,13 +52,6 @@ class SNAREDataModule(PolarbearDataModuleBase):
         return self._num_peaks
 
     @property
-    def num_cells(self):
-        """Number of cells in the dataset."""
-        if self._num_cells is None:
-            self._init()
-        return self._num_cells
-
-    @property
     def num_batches(self):
         """Number of experimental batches (datasets)."""
         return 1
@@ -67,8 +59,7 @@ class SNAREDataModule(PolarbearDataModuleBase):
     def setup(self, stage: str):
         """Load Dataset and assign train/val/test datasets for use in dataloaders."""
         if (
-            self._num_cells is None
-            or self._num_genes is None
+            self._num_genes is None
             or self._num_peaks is None
             or self._dset_train is None
             or self._dset_test is None
@@ -80,6 +71,8 @@ class SNAREDataModule(PolarbearDataModuleBase):
 
             atac_counts.data[:] = 1
 
+            split = {k: np.loadtxt(os.path.join(self._data_dir, v), dtype=int) for k, v in self._split_files.items()}
+
             atac_dset = SparseDataset(atac_counts)
             rna_dset = SparseDataset(rna_counts)
             batch_idx = torch.zeros((atac_counts.shape[0],), dtype=torch.int64)
@@ -90,4 +83,11 @@ class SNAREDataModule(PolarbearDataModuleBase):
                 else StackDataset(atac_dset, batch_idx, rna_dset, batch_idx)
             )
 
-            self._dset_train, self._dset_val, self._dset_test = random_split(dset, [0.6, 0.2, 0.2])
+            self._num_genes = rna_counts.shape[1]
+            self._num_peaks = atac_counts.shape[1]
+
+            self._dset_train, self._dset_val, self._dset_test = (
+                Subset(dset, split["train"]),
+                Subset(dset, split["val"]),
+                Subset(dset, split["test"]),
+            )
