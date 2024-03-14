@@ -3,7 +3,6 @@ from abc import abstractmethod
 
 import torch
 from pyro.ops.streaming import CountMeanVarianceStats
-from tqdm.auto import tqdm
 from zuko.distributions import DiagNormal
 from zuko.flows import Flow, MaskedAutoregressiveTransform, Unconditional
 from zuko.transforms import MonotonicRQSTransform, RotationTransform
@@ -256,18 +255,15 @@ class INNTranslatorLatent(INNTranslatorBase):
         )
 
         nlatents = len(destlatent)
+        return self._sample(sourcelatent, destbatch_idx, latentmean, latentvar, nlatents)
 
-        for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
-            flowsample = self._flow(torch.cat(sourcelatent, dim=-1)).sample() * torch.sqrt(
-                torch.cat(latentvar, dim=-1)
-            ) + torch.cat(latentmean, dim=-1)
-            datasample = self._destvae.decode_and_sample_normalized(
-                torch.tensor_split(flowsample, nlatents, dim=-1), destbatch_idx
-            )
-
-            self._stats.add(datasample.cpu().numpy())
-
-        return self._collect_predict_stats()
+    def _one_sample(self, sourcelatent, destbatch_idx, latentmean, latentvar, nlatents):
+        flowsample = self._flow(torch.cat(sourcelatent, dim=-1)).sample() * torch.sqrt(
+            torch.cat(latentvar, dim=-1)
+        ) + torch.cat(latentmean, dim=-1)
+        return self._destvae.decode_and_sample_normalized(
+            torch.tensor_split(flowsample, nlatents, dim=-1), destbatch_idx
+        )
 
 
 class INNTranslatorSample(INNTranslatorBase):
@@ -338,12 +334,9 @@ class INNTranslatorSample(INNTranslatorBase):
             sourcebatch, sourcebatch_idx, destbatch, destbatch_idx
         )
         totalstd = torch.sqrt(latentvar[0] + latentmean[1] ** 2)
+        return self._sample(sourcebatch, sourcebatch_idx, destbatch_idx, latentmean[0], totalstd)
 
-        for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
-            sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
-            flowsample = self._flow(sourcesample).sample() * totalstd + latentmean[0]
-            datasample = self._destvae.decode_normalized(flowsample, destbatch_idx)
-
-            self._stats.add(datasample.cpu().numpy())
-
-        return self._collect_predict_stats()
+    def _one_sample(self, sourcebatch, sourcebatch_idx, destbatch_idx, latentmean, totalstd):
+        sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
+        flowsample = self._flow(sourcesample).sample() * totalstd + latentmean
+        return self._destvae.decode_normalized(flowsample, destbatch_idx)

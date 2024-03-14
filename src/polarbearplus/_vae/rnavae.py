@@ -286,6 +286,7 @@ class RNAVAE(LightningVAEBase):
             entry the final value, the third entry the epoch at which the penalty starts to increase,
             and the fourth entry the number of epochs until the final value is reached.
         eps: Small value for numerical stability.
+        predict_n_samples: int = 1000,
     """
 
     def __init__(
@@ -304,11 +305,13 @@ class RNAVAE(LightningVAEBase):
         lr: float = 1e-3,
         beta: float | tuple[float, float, int, int] = 1,
         eps: float = 1e-3,
+        predict_n_samples: int = 1000,
     ):
         super().__init__(
             _RNAVAE,
             lr,
             beta,
+            predict_n_samples,
             ngenes=ngenes,
             nbatches=nbatches,
             logbatchmeans=logbatchmeans,

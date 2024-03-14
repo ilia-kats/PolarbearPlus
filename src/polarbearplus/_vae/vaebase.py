@@ -8,6 +8,7 @@ import pyro
 import torch
 from pyro import poutine
 
+from .._utils import PredictSamplingMixin
 from .scalelatentmessenger import scale_latent
 
 _InterpolationParams = namedtuple("_InterpolationParams", ["startval", "endval", "startepoch", "n_epochs"])
@@ -244,11 +245,17 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         pass
 
 
-class LightningVAEBase(L.LightningModule):
+class LightningVAEBase(PredictSamplingMixin, L.LightningModule):
     def __init__(
-        self, modulecls: type[VAEBase], lr: float, beta: float | tuple[float, float, int, int], *args, **kwargs
+        self,
+        modulecls: type[VAEBase],
+        lr: float,
+        beta: float | tuple[float, float, int, int],
+        predict_n_samples: int = 1000,
+        *args,
+        **kwargs,
     ):
-        super().__init__()
+        super().__init__(predict_n_samples=predict_n_samples)
         self._vae = modulecls(*args, **kwargs)
         self._lr = lr
 
@@ -283,6 +290,16 @@ class LightningVAEBase(L.LightningModule):
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         return self._step(batch, batch_idx, dataloader_idx, "-test_elbo")
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        latent = self.encode_latent(*batch)
+        auxiliary = self.encode_auxiliary(*batch)
+
+        samples = self._sample(latent, auxiliary, batch[1])
+        return {"latent": latent[0].cpu().numpy(), "reconstruction_stats": samples}
+
+    def _one_sample(self, latent, auxiliary, batch_idx):
+        return self.decode(latent, auxiliary, batch_idx)
 
     def forward(self, batch):
         return self._vae.encode_latent(*batch)

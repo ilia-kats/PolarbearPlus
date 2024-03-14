@@ -1,5 +1,6 @@
 import math
 import os
+from collections.abc import Mapping
 
 import zarr
 from lightning.pytorch.callbacks import BasePredictionWriter
@@ -12,27 +13,43 @@ class StatsWriter(BasePredictionWriter):
         self._chunk_max_mb = chunk_max_mb
         self._zarrstore = None
 
+    def _write_array(self, value, parent: zarr.Group, name: str):
+        if name not in parent:
+            ssize = value.nbytes / 1024**2
+            if ssize < -self._chunk_max_mb:
+                chunkshape = value.shape
+            else:
+                ndim = min(
+                    value.shape[0],
+                    max(1, math.ceil(self._chunk_max_mb / ssize * value.shape[0])),
+                )
+                chunkshape = (ndim, *value.shape[1:])
+            parent.create_dataset(name, data=value, chunks=chunkshape)
+        else:
+            parent[name].append(value, axis=0)
+
+    def _write_dict(self, value, parent: zarr.Group, name: str):
+        parent = parent.require_group(name, overwrite=False)
+        for k, s in value.items():
+            if isinstance(s, Mapping):
+                self._write_dict(s, parent, k)
+            else:
+                self._write_array(s, parent, k)
+
     def write_on_batch_end(self, trainer, pl_module, prediction, batch_indices, batch, batch_idx, dataloader_idx):
-        if not isinstance(prediction, dict):
-            raise ValueError(f"{self.__class__.__name__} only works with predictions that are dicts of arrays.")
+        if not isinstance(prediction, Mapping):
+            raise ValueError(
+                f"{self.__class__.__name__} only works with predictions that are (nested) dicts of arrays."
+            )
         if self._zarrstore is None:
             self._zarrstore = zarr.group(self._output_path, overwrite=True)
 
         for k, s in prediction.items():
-            if k not in self._zarrstore:
-                ssize = s.nbytes / 1024**2
-                if ssize < -self._chunk_max_mb:
-                    chunkshape = s.shape
-                else:
-                    ndim = min(
-                        s.shape[0],
-                        max(1, math.ceil(self._chunk_max_mb / ssize * s.shape[0])),
-                    )
-                    chunkshape = (ndim, *s.shape[1:])
-                self._zarrstore.create_dataset(k, data=s, chunks=chunkshape)
+            if isinstance(s, dict):
+                self._write_dict(s, self._zarrstore, k)
             else:
-                self._zarrstore[k].append(s, axis=0)
+                self._write_array(s, self._zarrstore, k)
 
-    def on_predict_end(self):
+    def on_predict_end(self, trainer, pl_module):
         if self._zarrstore is not None:
-            self._zarrstore.close()
+            self._zarrstore.store.close()

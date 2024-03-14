@@ -1,7 +1,6 @@
 import inspect
 
 import torch
-from tqdm.auto import tqdm
 
 from .._utils import MLP
 from .._vae import LightningVAEBase
@@ -123,15 +122,10 @@ class MLPTranslatorLatent(MLPTranslatorBase):
             self._translator(torch.cat(sourcelatent, dim=-1)), 2, dim=-1
         )
         translatedstdev = translatedstdev.exp()
+        return self._sample(sourcebatch, sourcebatch_idx, destbatch_idx)
 
-        for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
-            self._stats.add(
-                self._destvae.decode_and_sample_normalized((translatedmean, translatedstdev), destbatch_idx)
-                .cpu()
-                .numpy()
-            )
-
-        return self._collect_predict_stats()
+    def _one_sample(self, translatedmean, translatedstdev, destbatch_idx):
+        return self._destvae.decode_and_sample_normalized((translatedmean, translatedstdev), destbatch_idx)
 
 
 class MLPTranslatorSample(MLPTranslatorBase):
@@ -173,12 +167,9 @@ class MLPTranslatorSample(MLPTranslatorBase):
 
     def predict_step(self, batch, batch_idx):
         sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+        return self._sample(sourcebatch, sourcebatch_idx, destbatch_idx)
 
-        for _ in tqdm(range(self._n_predict_samples), leave=False, dynamic_ncols=True, desc="Sampling"):
-            sourcelatent = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
-            translatedlatent = self._translator(sourcelatent)
-            decoded = self._destvae.decode_normalized(translatedlatent, destbatch_idx)
-
-            self._stats.add(decoded.cpu().numpy())
-
-        return self._collect_predict_stats()
+    def _one_sample(self, sourcebatch, sourcebatch_idx, destbatch_idx):
+        sourcelatent = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
+        translatedlatent = self._translator(sourcelatent)
+        return self._destvae.decode_normalized(translatedlatent, destbatch_idx)
