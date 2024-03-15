@@ -122,7 +122,7 @@ class MLPTranslatorLatent(MLPTranslatorBase):
             self._translator(torch.cat(sourcelatent, dim=-1)), 2, dim=-1
         )
         translatedstdev = translatedstdev.exp()
-        return self._sample(sourcebatch, sourcebatch_idx, destbatch_idx)
+        return self._sample(translatedmean, translatedstdev, destbatch_idx)
 
     def _one_sample(self, translatedmean, translatedstdev, destbatch_idx):
         return self._destvae.decode_and_sample_normalized((translatedmean, translatedstdev), destbatch_idx)
