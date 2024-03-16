@@ -96,17 +96,19 @@ class INNTranslatorBase(TranslatorBase):
         block_n_layers: int = 2,
         block_layer_width: int = 64,
         block_residual: bool = False,
-        n_latent_vars: int = 1,
+        n_feature_vars: int = 1,
+        n_context_vars: int = 1,
         lr: float = 1e-3,
         predict_n_samples: int = 1000,
     ):
         super().__init__(sourcevae, destvae, lr, predict_n_samples)
 
-        self._n_latent_vars = n_latent_vars
+        self._n_feature_vars = n_feature_vars
+        self._n_context_vars = n_context_vars
 
         self._flow = CouplingNSFWithRotation(
-            features=self._n_latent_vars * self._destvae.n_latent_dim,
-            context=self._n_latent_vars * self._sourcevae.n_latent_dim,
+            features=self._n_feature_vars * self._destvae.n_latent_dim,
+            context=self._n_context_vars * self._sourcevae.n_latent_dim,
             transforms=n_layers,
             n_bins=n_bins,
         )
@@ -193,7 +195,7 @@ class INNTranslatorBase(TranslatorBase):
 
 
 class INNTranslatorLatent(INNTranslatorBase):
-    """INN-based translator network that thranslates between parameters of the variational distribution.
+    """INN-based translator network that translates between parameters of the variational distribution.
 
     Uses a coupling neural spline flow.
 
@@ -229,7 +231,8 @@ class INNTranslatorLatent(INNTranslatorBase):
             block_n_layers=block_n_layers,
             block_layer_width=block_layer_width,
             block_residual=block_residual,
-            n_latent_vars=2,
+            n_feature_vars=2,
+            n_context_vars=2,
             lr=lr,
             predict_n_samples=predict_n_samples,
         )
@@ -254,20 +257,20 @@ class INNTranslatorLatent(INNTranslatorBase):
             sourcebatch, sourcebatch_idx, destbatch, destbatch_idx
         )
 
-        nlatents = len(destlatent)
-        return self._sample(sourcelatent, destbatch_idx, latentmean, latentvar, nlatents)
-
-    def _one_sample(self, sourcelatent, destbatch_idx, latentmean, latentvar, nlatents):
-        flowsample = self._flow(torch.cat(sourcelatent, dim=-1)).sample() * torch.sqrt(
-            torch.cat(latentvar, dim=-1)
-        ) + torch.cat(latentmean, dim=-1)
-        return self._destvae.decode_and_sample_normalized(
-            torch.tensor_split(flowsample, nlatents, dim=-1), destbatch_idx
+        return self._sample(
+            torch.cat(sourcelatent, dim=-1),
+            destbatch_idx,
+            torch.cat(latentmean, dim=-1),
+            torch.sqrt(torch.cat(latentvar, dim=-1)),
         )
+
+    def _one_sample(self, sourcelatent, destbatch_idx, latentmean, latentstd):
+        flowsample = self._flow(sourcelatent).sample() * latentstd + latentmean
+        return self._destvae.decode_and_sample_normalized(torch.tensor_split(flowsample, 2, dim=-1), destbatch_idx)
 
 
 class INNTranslatorSample(INNTranslatorBase):
-    """INN-based translator network that thranslates between samples from the variational distribution.
+    """INN-based translator network that translates between samples from the variational distribution.
 
     Uses a coupling neural spline flow.
 
@@ -303,7 +306,8 @@ class INNTranslatorSample(INNTranslatorBase):
             block_n_layers=block_n_layers,
             block_layer_width=block_layer_width,
             block_residual=block_residual,
-            n_latent_vars=1,
+            n_feature_vars=1,
+            n_context_vars=1,
             lr=lr,
             predict_n_samples=predict_n_samples,
         )
@@ -340,3 +344,81 @@ class INNTranslatorSample(INNTranslatorBase):
         sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
         flowsample = self._flow(sourcesample).sample() * totalstd + latentmean
         return self._destvae.decode_normalized(flowsample, destbatch_idx)
+
+
+class INNTranslatorDoubleSample(INNTranslatorBase):
+    """INN-based translator network that uses two sampling steps.
+
+    Uses a coupling neural spline flow. This translates a sample from the source
+    variational distribution to parameters of the target variational distribution.
+    Prediction first samples from the source variational distribution, then samples
+    from the normalizing flow, and finally samples from the target variational distribution.
+
+    Args:
+        sourcevae: The encoder VAE.
+        destvae: The decoder VAE.
+        n_layers: Number of coupling blocks in the invertible neural network.
+        n_bins: Number of spline bins.
+        block_n_layers: Number of hidden layers in each coupling block.
+        block_layer_width: Width of the hidden layers in a coupling block.
+        block_residual: Whether to use residual layers in the coupling blocks.
+        lr: Learning rate.
+        predict_n_samples: Number of samples to take during prediction.
+    """
+
+    def __init__(
+        self,
+        sourcevae: LightningVAEBase,
+        destvae: LightningVAEBase,
+        n_layers: int,
+        n_bins: int,
+        block_n_layers: int = 2,
+        block_layer_width: int = 64,
+        block_residual: bool = False,
+        lr: float = 1e-3,
+        predict_n_samples: int = 1000,
+    ):
+        super().__init__(
+            sourcevae=sourcevae,
+            destvae=destvae,
+            n_layers=n_layers,
+            n_bins=n_bins,
+            block_n_layers=block_n_layers,
+            block_layer_width=block_layer_width,
+            block_residual=block_residual,
+            n_feature_vars=2,
+            n_context_vars=1,
+            lr=lr,
+            predict_n_samples=predict_n_samples,
+        )
+
+    def _step_impl(
+        self,
+        sourcebatch: torch.Tensor,
+        sourcebatch_idx: torch.Tensor,
+        destbatch: torch.Tensor,
+        destbatch_idx: torch.Tensor,
+    ):
+        sourcelatent, destlatent, latentmean, latentvar = (
+            torch.cat(tens, dim=-1)
+            for tens in super()._step_impl(sourcebatch, sourcebatch_idx, destbatch, destbatch_idx)
+        )
+
+        sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
+        destlatent = (destlatent - latentmean) / torch.sqrt(latentvar)
+        return -self._flow(sourcesample).log_prob(destlatent).sum() / (destbatch.shape[0] * self._destvae.n_latent_dim)
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        sourcebatch, sourcebatch_idx, destbatch, destbatch_idx = batch
+        sourcelatent, destlatent, latentmean, latentvar = super()._step_impl(
+            sourcebatch, sourcebatch_idx, destbatch, destbatch_idx
+        )
+
+        return self._sample(
+            sourcebatch, sourcebatch_idx, destbatch_idx, torch.cat(latentmean, dim=-1), torch.sqrt(torch.cat(latentvar))
+        )
+
+    def _one_sample(self, sourcebatch, sourcebatch_idx, destbatch_idx, latentmean, latentstd):
+        sourcesample = self._sourcevae.encode_and_sample_latent(sourcebatch, sourcebatch_idx)
+        flowsample = self._flow(sourcesample).sample() * latentstd + latentmean
+        return self._destvae.decode_and_sample_normalized(torch.tensor_split(flowsample, 2, dim=-1), destbatch_idx)
