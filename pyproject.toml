@@ -22,9 +22,12 @@ urls.Home-page = "https://github.com/ilia-kats/PolarbearPlus"
 dependencies = [
     "torch>=2.1",
     "pyro-ppl>=1.8.5",
+    "zuko>=1.1.0",
     "lightning>=2.2",
     "numpy>=1.20",
     "pandas",
+    "numpy_onlinestats",
+    "zarr",
     # for debug logging (referenced from the issue template)
     "session-info",
 ]

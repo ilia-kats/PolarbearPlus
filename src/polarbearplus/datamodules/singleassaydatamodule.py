@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.io import mmread
-from torch.utils.data import ConcatDataset, StackDataset, random_split
+from torch.utils.data import ConcatDataset, StackDataset, Subset
 
 from .utils import PolarbearDataModuleBase, SparseDataset
 
@@ -29,14 +29,6 @@ class AtacDataModule(PolarbearDataModuleBase):
         data_dir: directory to save all files
     """
 
-    _files = {
-        "single": "adultbrainfull50_atac_outer_single.mtx",
-        "snareseq": "adultbrainfull50_atac_outer_snareseq.mtx",
-        "snareseq_barcodes": "adultbrainfull50_atac_outer_snareseq_barcodes.tsv",
-        "single_barcodes": "adultbrainfull50_atac_outer_single_barcodes.tsv",
-        "peak_annotation": "adultbrainfull50_atac_outer_peaks.txt",
-    }
-
     def __init__(
         self,
         batch_size: int,
@@ -58,13 +50,6 @@ class AtacDataModule(PolarbearDataModuleBase):
         return self._num_peaks
 
     @property
-    def num_cells(self):
-        """Number of cells in the dataset."""
-        if self._num_cells is None:
-            self._init()
-        return self._num_cells
-
-    @property
     def num_batches(self):
         """Number of experimental batches (datasets)."""
         return 2
@@ -78,26 +63,7 @@ class AtacDataModule(PolarbearDataModuleBase):
 
     def setup(self, stage: str | None = None):
         """Load Dataset and assign train/val/test datasets for use in dataloaders."""
-        if self._chr_idx is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
-            _logger.info("reading data...")
-            atac_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"])).tocsr().astype(np.float32)
-            atac_counts2 = mmread(os.path.join(self._data_dir, self._files["single"])).tocsr().astype(np.float32)
-            atac_counts1.data[:], atac_counts2.data[:] = 1, 1
-
-            # create a random split of the co-assay data
-            snare_dset = StackDataset(
-                SparseDataset(atac_counts1), torch.zeros((atac_counts1.shape[0],), dtype=torch.int64)
-            )
-            snare_train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
-
-            # add the single assay dataset to the training set
-            single_dset = StackDataset(
-                SparseDataset(atac_counts2), torch.ones((atac_counts2.shape[0],), dtype=torch.int64)
-            )
-            self._dset_train = ConcatDataset([snare_train, single_dset])
-
-            self._num_cells = len(snare_dset) + len(single_dset)
-            self._num_peaks = atac_counts1.shape[1]
+        if self._chr_idx is None:
             peaks = pd.read_table(
                 os.path.join(self._data_dir, self._files["peak_annotation"]),
                 sep=":",
@@ -114,6 +80,31 @@ class AtacDataModule(PolarbearDataModuleBase):
                 peak_counts[chrorder],
             )
             self._chr_idx = [(idx, idx + cnt) for idx, cnt in zip(peak_indices, peak_counts, strict=False)]
+
+        if stage is not None:
+            _logger.info("reading data...")
+            atac_counts1 = mmread(os.path.join(self._data_dir, self._files["atac_snareseq"])).tocsr().astype(np.float32)
+            atac_counts2 = mmread(os.path.join(self._data_dir, self._files["atac_single"])).tocsr().astype(np.float32)
+            atac_counts1.data[:], atac_counts2.data[:] = 1, 1
+
+            split = {k: np.loadtxt(os.path.join(self._data_dir, v), dtype=int) for k, v in self._split_files.items()}
+
+            snare_dset = StackDataset(
+                SparseDataset(atac_counts1), torch.zeros((atac_counts1.shape[0],), dtype=torch.int64)
+            )
+            snare_train, self._dset_val, self._dset_test = (
+                Subset(snare_dset, split["train"]),
+                Subset(snare_dset, split["val"]),
+                Subset(snare_dset, split["test"]),
+            )
+
+            # add the single assay dataset to the training set
+            single_dset = StackDataset(
+                SparseDataset(atac_counts2), torch.ones((atac_counts2.shape[0],), dtype=torch.int64)
+            )
+            self._dset_train = ConcatDataset([snare_train, single_dset])
+
+            self._num_peaks = atac_counts1.shape[1]
 
 
 class RnaDataModule(PolarbearDataModuleBase):
@@ -132,14 +123,6 @@ class RnaDataModule(PolarbearDataModuleBase):
         persistent_workers: Whether to not shut down the worker processes after every epoch.
         data_dir: directory to save all files
     """
-
-    _files = {
-        "snareseq": "adultbrainfull50_rna_outer_snareseq.mtx",  # SNARE-seq
-        "single": "adultbrainfull50_rna_outer_single.mtx",  # Single assay RNA-seq
-        "snareseq_barcodes": "adultbrainfull50_rna_outer_snareseq_barcodes.tsv",  # SNARE-seq cells
-        "single_barcodes": "adultbrainfull50_rna_outer_single_barcodes.tsv",  # single assay cells
-        "genenames": "adultbrainfull50_rna_outer_genes.txt",
-    }
 
     def __init__(
         self,
@@ -162,13 +145,6 @@ class RnaDataModule(PolarbearDataModuleBase):
         if self._num_genes is None:
             self._init()
         return self._num_genes
-
-    @property
-    def num_cells(self):
-        """Number of cells in dataset."""
-        if self._num_cells is None:
-            self._init()
-        return self._num_cells
 
     @property
     def num_batches(self):
@@ -200,14 +176,19 @@ class RnaDataModule(PolarbearDataModuleBase):
         """Load Dataset and assign train/val/test datasets for use in dataloaders."""
         if self._genes is None or self._dset_train is None or self._dset_val is None or self._dset_test is None:
             _logger.info("reading data...")
-            rna_counts1 = mmread(os.path.join(self._data_dir, self._files["snareseq"])).tocsr().astype(np.float32)
-            rna_counts2 = mmread(os.path.join(self._data_dir, self._files["single"])).tocsr().astype(np.float32)
+            rna_counts1 = mmread(os.path.join(self._data_dir, self._files["rna_snareseq"])).tocsr().astype(np.float32)
+            rna_counts2 = mmread(os.path.join(self._data_dir, self._files["rna_single"])).tocsr().astype(np.float32)
 
-            # create a random split of the co-assay data
+            split = {k: np.loadtxt(os.path.join(self._data_dir, v), dtype=int) for k, v in self._split_files.items()}
+
             snare_dset = StackDataset(
                 SparseDataset(rna_counts1), torch.zeros((rna_counts1.shape[0],), dtype=torch.int64)
             )
-            snare_train, self._dset_val, self._dset_test = random_split(snare_dset, [0.6, 0.2, 0.2])
+            snare_train, self._dset_val, self._dset_test = (
+                Subset(snare_dset, split["train"]),
+                Subset(snare_dset, split["val"]),
+                Subset(snare_dset, split["test"]),
+            )
 
             # add the single assay dataset to the training set
             single_dset = StackDataset(
@@ -215,11 +196,13 @@ class RnaDataModule(PolarbearDataModuleBase):
             )
             self._dset_train = ConcatDataset([snare_train, single_dset])
 
-            self._num_cells = len(snare_dset) + len(single_dset)
             self._num_genes = rna_counts1.shape[1]
             self._genes = pd.read_csv(os.path.join(self._data_dir, self._files["genenames"]), sep="\t", header=None)
 
             # Compute mean and variance of library size for each batch
-            library_size1, library_size2 = np.log(rna_counts1.sum(axis=1).A1), np.log(rna_counts2.sum(axis=1).A1)
+            library_size1, library_size2 = (
+                np.log(rna_counts1[split["train"], :].sum(axis=1).A1),
+                np.log(rna_counts2.sum(axis=1).A1),
+            )
             self._logbatchmean = np.array([library_size1.mean(), library_size2.mean()])
             self._logbatchvar = np.array([library_size1.var(), library_size2.var()])
