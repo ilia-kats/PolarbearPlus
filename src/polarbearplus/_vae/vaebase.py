@@ -138,6 +138,9 @@ class LightningVAEBase(L.LightningModule):
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         return self._step(batch, batch_idx, dataloader_idx, "-test_elbo")
 
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        return self(batch)
+
     def forward(self, batch):
         return self._vae.encode_latent(*batch)
 
