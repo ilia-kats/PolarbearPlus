@@ -292,7 +292,7 @@ class LightningVAEBase(PredictSamplingMixin, L.LightningModule):
         return self._step(batch, batch_idx, dataloader_idx, "-test_elbo")
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        latent = self.encode_latent(*batch)
+        latent = self.encode_xlatent(*batch)
         auxiliary = self.encode_auxiliary(*batch)
 
         samples = self._sample(latent, auxiliary, batch[1])
