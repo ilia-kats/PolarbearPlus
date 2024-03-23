@@ -277,10 +277,10 @@ class _ATACVAE(VAEBase):
             l_n = pyro.sample("l_n", dist.Delta(self.one).mask(region_mat is None))  # (ncells, 1)
 
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
+                z_n = pyro.sample(self.latent_name, dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
             y_n = pyro.deterministic("y_n", self._decoder(z_n, batch_idx))  # (ncells, nregions)
-            regionscaled = pyro.deterministic("norm_y_n", y_n * self.r)
+            regionscaled = pyro.deterministic(self.normalized_name, y_n * self.r)
             probs = pyro.deterministic("mu", regionscaled * l_n)
             with pyro.plate("regions", size=self.nregions, dim=-1):
                 pyro.sample(self.observed_name, dist.Bernoulli(probs=probs), obs=region_mat)

@@ -124,10 +124,10 @@ class _RNAVAE(VAEBase):
                 "l_n", dist.LogNormal(self.logbatchmeans[batch_idx, None], self.logbatchstds[batch_idx, None])
             )  # (ncells, 1)
             with pyro.plate("latent", size=self.n_latent_dim, dim=-1):
-                z_n = pyro.sample("z_n", dist.Normal(self.zero, self.one))  # (ncells, nlatent)
+                z_n = pyro.sample(self.latent_name, dist.Normal(self.zero, self.one))  # (ncells, nlatent)
 
             z_n = torch.cat((z_n, F.one_hot(batch_idx, self.nbatches).to(z_n.dtype)), -1)
-            rho_n = pyro.deterministic("rho_n", self._decoder(z_n))  # (ncells, ngenes)
+            rho_n = pyro.deterministic(self.normalized_name, self._decoder(z_n))  # (ncells, ngenes)
 
             mu = pyro.deterministic("mu", l_n * rho_n)
             theta_b = self.theta[batch_idx, :]  # (ncells, ngenes)
@@ -153,7 +153,7 @@ class _RNAVAE(VAEBase):
             batch_idx: Index of the experimental batch for each cell.
 
         Returns:
-            A two-element tuple with means and standard deviations, each of size n_cells x 1.
+            A two-element tuple with means and standard deviations, each of length n_cells.
         """
         concat = torch.cat(
             (torch.log1p(expression_mat), F.one_hot(batch_idx, self.nbatches).to(expression_mat.dtype)), -1
@@ -219,8 +219,8 @@ class _RNAVAE(VAEBase):
         Args:
             latent_means: Cells x latent_vars latent mean matrix.
             latent_stdevs: Cells x latent_vars latent standard deviation matrix.
-            sizefactor_means: Cells x 1 latent sizefactor mean matrix.
-            sizefactor_stdevs: Cells x 1 latent sizefactor scale matrix.
+            sizefactor_means: Latent sizefactor mean vector of length n_cells.
+            sizefactor_stdevs: Latent sizefactor scale vector of length n_cells.
         """
         self._baseguide(
             latent_means.shape[0],
@@ -236,8 +236,8 @@ class _RNAVAE(VAEBase):
 
         Args:
             sample: A sample from the variational distribution
-            sizefactor_means: Cells x 1 latent sizefactor mean matrix.
-            sizefactor_stdevs: Cells x 1 latent sizefactor scale matrix.
+            sizefactor_means: Latent sizefactor mean vector of length n_cells.
+            sizefactor_stdevs: Latent sizefactor scale vector of length n_cells.
         """
         self._baseguide(
             sample.shape[0],

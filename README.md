@@ -1,24 +1,11 @@
 # PolarbearPlus
 
-[![Tests][badge-tests]][link-tests]
-[![Documentation][badge-docs]][link-docs]
-
-[badge-tests]: https://img.shields.io/github/actions/workflow/status/ilia-kats/PolarbearPlus/test.yaml?branch=main
-[link-tests]: https://github.com/ilia-kats/PolarbearPlus/actions/workflows/test.yml
-[badge-docs]: https://img.shields.io/readthedocs/PolarbearPlus
-
-Polarbear + normalizing flows
-
-## Getting started
-
-Please refer to the [documentation][link-docs]. In particular, the
-
--   [API documentation][link-api].
+Imputation of missing modalities in single-cell data with normalizing flows.
 
 ## Installation
 
-You need to have Python 3.9 or newer installed on your system. If you don't have
-Python installed, we recommend installing [Mambaforge](https://github.com/conda-forge/miniforge#mambaforge).
+You need to have Python 3.10 or newer installed on your system. If you don't have
+Python installed, we recommend installing [Micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html).
 
 There are several alternative options to install PolarbearPlus:
 
@@ -35,22 +22,3 @@ pip install PolarbearPlus
 ```bash
 pip install git+https://github.com/ilia-kats/PolarbearPlus.git@main
 ```
-
-## Release notes
-
-See the [changelog][changelog].
-
-## Contact
-
-For questions and help requests, you can reach out in the [scverse discourse][scverse-discourse].
-If you found a bug, please use the [issue tracker][issue-tracker].
-
-## Citation
-
-> t.b.a
-
-[scverse-discourse]: https://discourse.scverse.org/
-[issue-tracker]: https://github.com/ilia-kats/PolarbearPlus/issues
-[changelog]: https://PolarbearPlus.readthedocs.io/latest/changelog.html
-[link-docs]: https://PolarbearPlus.readthedocs.io
-[link-api]: https://PolarbearPlus.readthedocs.io/latest/api.html

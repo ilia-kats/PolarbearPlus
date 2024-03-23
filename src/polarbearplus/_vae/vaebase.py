@@ -296,7 +296,11 @@ class LightningVAEBase(PredictSamplingMixin, L.LightningModule):
         auxiliary = self.encode_auxiliary(*batch)
 
         samples = self._sample(latent, auxiliary, batch[1])
-        return {"latent": latent[0].cpu().numpy(), "reconstruction_stats": samples}
+        ret = {f"latent_{i}": arr.cpu().numpy() for i, arr in enumerate(latent)} | {
+            f"auxiliary_{i}": arr.cpu().numpy() for i, arr in enumerate(auxiliary)
+        }
+        ret["reconstruction_stats"] = samples
+        return ret
 
     def _one_sample(self, latent, auxiliary, batch_idx):
         return self.decode(latent, auxiliary, batch_idx)
