@@ -61,7 +61,7 @@ def normalize_counts(x, normlib=True, logscale=True):
 
 def corr_obs_reocnstr(x, y, per_gene=True, data_type="RNA", plot=False):
     """
-    compute correlations across cells or genes between predicted and observed counts.
+    compute correlations across cells or genes. 
     """
     num_genes, num_cells = x.shape[1], y.shape[0]
 
