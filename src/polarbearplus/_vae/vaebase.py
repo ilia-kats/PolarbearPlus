@@ -116,13 +116,6 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         )
         return model_trace.nodes[self.normalized_name]["value"]
 
-    def _sample_guide_trace(self, latent_sample: torch.Tensor, auxiliary: tuple[torch.Tensor]) -> pyro.poutine.Trace:
-        guide_trace = poutine.trace(self.sample_guide).get_trace(latent_sample, *auxiliary)
-        guide_trace.nodes[self.latent_name][
-            "value"
-        ] = latent_sample  # we can't use poutine.condition here because it sets is_observed = True, which won't work with replay
-        return guide_trace
-
     def decoded_sample_likelihood(
         self, latent_sample: torch.Tensor, observed: torch.Tensor, batch_idx: torch.Tensor
     ) -> float:
@@ -134,9 +127,12 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
             batch_idx: Index of the experimental batch for each cell.
         """
         auxiliary = self.encode_auxiliary(observed, batch_idx)
-        guide_trace = self._sample_guide_trace(latent_sample, auxiliary)
+        guide_trace = poutine.trace(self.sample_guide).get_trace(latent_sample, *auxiliary)
         model_trace = poutine.trace(
-            poutine.block(poutine.replay(self.model, guide_trace), expose_fn=lambda msg: msg["is_observed"])
+            poutine.block(
+                poutine.replay(poutine.condition(self.model, {self.latent_name: latent_sample}), guide_trace),
+                expose_fn=lambda msg: msg["is_observed"],
+            )
         ).get_trace(observed, batch_idx)
         return -model_trace.log_prob_sum()
 
@@ -153,8 +149,10 @@ class VAEBase(pyro.nn.PyroModule, metaclass=_VAEMeta):
         Returns:
             A sample of observed data
         """
-        guide_trace = self._sample_guide_trace(latent_sample, auxiliary)
-        model_trace = poutine.trace(poutine.replay(self.model, guide_trace)).get_trace(None, batch_idx)
+        guide_trace = poutine.trace(self.sample_guide).get_trace(latent_sample, *auxiliary)
+        model_trace = poutine.trace(
+            poutine.replay(pyro.poutine.condition(self.model, {self.latent_name: latent_sample}), guide_trace)
+        ).get_trace(None, batch_idx)
         return model_trace.nodes[self.observed_name]["value"]
 
     def decode_and_sample_normalized(self, latent: tuple[torch.Tensor], batch_idx: torch.Tensor) -> torch.Tensor:
@@ -292,7 +290,7 @@ class LightningVAEBase(PredictSamplingMixin, L.LightningModule):
         return self._step(batch, batch_idx, dataloader_idx, "-test_elbo")
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        latent = self.encode_xlatent(*batch)
+        latent = self.encode_latent(*batch)
         auxiliary = self.encode_auxiliary(*batch)
 
         samples = self._sample(latent, auxiliary, batch[1])
