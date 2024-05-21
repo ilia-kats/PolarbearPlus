@@ -1,7 +1,7 @@
 {
   "template": "https://github.com/scverse/cookiecutter-scverse",
-  "commit": "f0ce514218f780de7e76dc87a7d52a86034174a7",
-  "checkout": null,
+  "commit": "87a407a65408d75a949c0b54b19fd287475a56f8",
+  "checkout": "v0.4.0",
   "context": {
     "cookiecutter": {
       "project_name": "PolarbearPlus",
