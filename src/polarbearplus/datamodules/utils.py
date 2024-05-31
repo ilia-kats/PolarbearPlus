@@ -69,6 +69,7 @@ class PolarbearDataModuleBase(L.LightningDataModule):
     _base_url = "https://noble.gs.washington.edu/~ranz0/Polarbear/data/"
     _files = {
         "atac_single": "adultbrainfull50_atac_outer_single.mtx",  # Single assay ATACseq
+        "atac_single_dataset": "adultbrainfull50_atac_outer_single_barcodes_dataset.mtx",  # Single assay ATACseq dataset assignment
         "atac_snareseq": "adultbrainfull50_atac_outer_snareseq.mtx",  # SNARE-seq ATACseq
         "rna_snareseq": "adultbrainfull50_rna_outer_snareseq.mtx",  # SNARE-seq RNAseq
         "rna_single": "adultbrainfull50_rna_outer_single.mtx",  # Single assay RNAseq

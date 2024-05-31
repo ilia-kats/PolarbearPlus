@@ -52,7 +52,7 @@ class AtacDataModule(PolarbearDataModuleBase):
     @property
     def num_batches(self):
         """Number of experimental batches (datasets)."""
-        return 2
+        return 3
 
     @property
     def chromosome_indices(self):
@@ -87,6 +87,11 @@ class AtacDataModule(PolarbearDataModuleBase):
             atac_counts2 = mmread(os.path.join(self._data_dir, self._files["atac_single"])).tocsr().astype(np.float32)
             atac_counts1.data[:], atac_counts2.data[:] = 1, 1
 
+            atac_counts2_datasets = (
+                mmread(os.path.join(self._data_dir, self._files["atac_single_dataset"])).tocsr().indices
+            )
+            atac_counts2_datasets -= atac_counts2_datasets.min()
+
             split = {k: np.loadtxt(os.path.join(self._data_dir, v), dtype=int) for k, v in self._split_files.items()}
 
             snare_dset = StackDataset(
@@ -100,7 +105,7 @@ class AtacDataModule(PolarbearDataModuleBase):
 
             # add the single assay dataset to the training set
             single_dset = StackDataset(
-                SparseDataset(atac_counts2), torch.ones((atac_counts2.shape[0],), dtype=torch.int64)
+                SparseDataset(atac_counts2), torch.as_tensor(atac_counts2_datasets + 1, dtype=torch.int64)
             )
             self._dset_train = ConcatDataset([snare_train, single_dset])
 
